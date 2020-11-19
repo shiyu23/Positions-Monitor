@@ -1,0 +1,15 @@
+策略
+gamma
+vega
+theta
+theta-策略1
+theta-策略2
+300-策略1
+300-策略2
+300-策略3
+350-策略1
+350-策略2
+350-策略3
+convexity
+skew
+方向
