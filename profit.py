@@ -17,6 +17,9 @@ import numpy as np
 import copy
 
 
+global localtime
+localtime = time.localtime()
+
 # Maturity
 class Maturity(Enum):
     M1 = 1; M2 = 2; M3 = 3; Q1 = 4; Q2 = 5; Q3 = 6
@@ -100,8 +103,8 @@ def cdf(x: float):
     sign = 1
     if x < 0:
         sign = -1
-    x = math.fabs(x) / math.sqrt(2.0);
-    t = 1.0 / (1.0 + p * x);
+    x = math.fabs(x) / math.sqrt(2.0)
+    t = 1.0 / (1.0 + p * x)
     y = 1.0 - (((((a5 * t + a4) * t) + a3) * t + a2) * t + a1) * t * math.exp(- x * x)
     return 0.5 * (1.0 + sign * y)
 
@@ -137,7 +140,10 @@ class OptionInfo:
         self.yc_master_contract: str = ''
 
     def midbidaskspread(self):
-        return (self.ask+self.bid)/2
+        if '' not in [self.ask, self.bid]:
+            return (self.ask + self.bid)/2
+        else:
+            return None
 
     def iv(self):
         a = 0.0001; b = 3; NTRY = 20; FACTOR = 1.6; S = self.S; T = self.T; K = self.K; P = self.midbidaskspread(); oty = self.oty
@@ -199,6 +205,8 @@ class OptData: # one stock type
             self.p_limit = 0.01
             self.tick_limit = 10
             self.matlist = [Maturity.M1, Maturity.M2, Maturity.Q1, Maturity.Q2]
+        for mat in self.matlist:
+            self.S[mat] = ''; self.k0[mat] = ''; self.posi[mat] = ''
         self.k_list = {}
         self.getMat()
         
@@ -218,8 +226,7 @@ class OptData: # one stock type
             return num
 
         c = calendar.Calendar(firstweekday=calendar.SUNDAY)
-        t = time.localtime()
-        year = t.tm_year; month = t.tm_mon; mday = t.tm_mday
+        year = localtime.tm_year; month = localtime.tm_mon; mday = localtime.tm_mday
         currentDate = calendar.datetime.date(year, month, mday)
 
         for mat in self.matlist:
@@ -227,35 +234,36 @@ class OptData: # one stock type
             self.initT[mat] = self.T[mat]
 
     def subscribe_init(self, mat: Maturity):
-        # QuoteID and Optionlists # IO2006-C-3500, 510050C2006M03000, 510300C2006M03800, 159919C2006M004000
+        # QuoteID and Optionlists      TC.O.SSE.510300.202012.C.5 | TC.O.SSE.510050A.202012.C.3.351
         QuoteID_addin = []
         for id in QuoteID:
             if self.sty == StockType.gz300 and id[11:13] == 'IO' and id[16:20] == self.Mat_to_2005[mat]:
                 QuoteID_addin.append(id)
-            elif self.sty == StockType.etf50 and id[9:15] == '510050' and id[18:22] == self.Mat_to_2005[mat]:
+            elif self.sty == StockType.etf50 and id[9:15] == '510050' and self.Mat_to_2005[mat] in [id[18:22], id[19:23]]:
                 QuoteID_addin.append(id)
-            elif self.sty == StockType.h300 and id[9:15] == '510300' and id[18:22] == self.Mat_to_2005[mat]:
+            elif self.sty == StockType.h300 and id[9:15] == '510300' and self.Mat_to_2005[mat] in [id[18:22], id[19:23]]:
                 QuoteID_addin.append(id)
-            elif self.sty == StockType.s300 and id[10:16] == '159919' and id[19:23] == self.Mat_to_2005[mat]:
+            elif self.sty == StockType.s300 and id[10:16] == '159919' and self.Mat_to_2005[mat] in [id[19:23], id[20:24]]:
                 QuoteID_addin.append(id)
 
         self.OptionList[mat] = []
         QuoteID_addin_C_K = []
         for id in QuoteID_addin:
-            if (self.sty == StockType.gz300 and id[21] == 'C') or (self.sty in [StockType.etf50, StockType.h300] and id[23] == 'C') or (self.sty == StockType.s300 and id[24] == 'C'):
+            if '.C.' in id:
                 QuoteID_addin_C_K.append(float(id[last_C_P(id):]))
         QuoteID_addin_C_K.sort()
         for k in QuoteID_addin_C_K:
-            self.OptionList[mat].append([OptionInfo(self.sty, mat, OptionType.C, k, 10000, 10001, 10000), OptionInfo(self.sty, mat, OptionType.P, k, 1, 2, 1)])
+            self.OptionList[mat].append([OptionInfo(self.sty, mat, OptionType.C, k, '', '', ''), OptionInfo(self.sty, mat, OptionType.P, k, '', '', '')])
 
         self.k_list[mat] = QuoteID_addin_C_K
-        self.S_k0_posi(mat)
 
     def S_k0_posi(self, mat: Maturity): # update
         optlist = self.OptionList[mat]
         n = len(optlist)
-        future = [optlist[i][0].midbidaskspread() - optlist[i][1].midbidaskspread() + optlist[i][0].K for i in range(n)]
+        future = [optlist[i][0].midbidaskspread() - optlist[i][1].midbidaskspread() + optlist[i][0].K for i in range(n) if None not in [optlist[i][0].midbidaskspread(), optlist[i][1].midbidaskspread()] and 'A' not in optlist[i][0].yc_master_contract]
         future.sort()
+        if future[1:-1] == []:
+            return
         avg = np.mean(future[1:-1])
         self.S[mat] = avg
         self.posi[mat] = np.argmin(abs(np.array(self.k_list[mat]) - avg))
@@ -283,7 +291,10 @@ class FutureData:
         self.getMat()
 
     def midbidaskspread(self, mat: Maturity):
-        return (self.ask[mat]+self.bid[mat])/2
+        if '' not in [self.ask[mat], self.bid[mat]]:
+            return (self.ask[mat] + self.bid[mat])/2
+        else:
+            return None
         
     def getMat(self):
         for mat in self.matlist:
@@ -301,8 +312,7 @@ class FutureData:
             return num
 
         c = calendar.Calendar(firstweekday=calendar.SUNDAY)
-        t = time.localtime()
-        year = t.tm_year; month = t.tm_mon; mday = t.tm_mday
+        year = localtime.tm_year; month = localtime.tm_mon; mday = localtime.tm_mday
         currentDate = calendar.datetime.date(year, month, mday)
 
         for mat in self.matlist:
@@ -363,6 +373,13 @@ class monitor_yield(object):
         # 对冲补单
         self.hedge_addin_orderid = []
 
+        # 记录
+        self.order_data_txt = open(f'./log/order data {localtime.tm_year}-{localtime.tm_mon}-{localtime.tm_mday}.txt', 'a')
+        self.hedge_data_txt = open(f'./log/hedge data {localtime.tm_year}-{localtime.tm_mon}-{localtime.tm_mday}.txt', 'a')
+
+        #部位是否有熔断
+        self.if_position_cb: bool = False
+
         #random.shuffle(self.colors)
         #self.lock = threading.RLock()
 
@@ -407,17 +424,21 @@ class monitor_yield(object):
             def close():
                 g_TradeZMQ.trade_logout(g_TradeSession)
                 g_QuoteZMQ.quote_logout(g_QuoteSession)
+                self.order_data_txt.close()
+                self.hedge_data_txt.close()
                 root.destroy()
                 global exit_signal
                 exit_signal = 1
                 os._exit(0)
 
-            login_out = messagebox.askquestion(title='提示', message='是否需要关闭前保存文件？')
-            if login_out == 'yes':
+            login_out = messagebox.askyesnocancel(title='提示', message='是否需要关闭前保存文件？')
+            if login_out == True:
                 self.save_file()
                 close()
-                return
-            close()
+            elif login_out == False:
+                close()
+            elif login_out == None:
+                pass
 
         root.protocol("WM_DELETE_WINDOW", callback)
         root.mainloop()
@@ -473,7 +494,7 @@ class monitor_yield(object):
                 if j < 3:
                     self.label_var[values[0]][values[1]][name].set(values[j])
                 else:
-                    self.label_var[values[0]][values[1]][name].set('{:g}'.format(0)) 
+                    self.label_var[values[0]][values[1]][name].set('{:g}'.format(0))
 
         # read Ft_for_which
         t = 1
@@ -624,6 +645,13 @@ class monitor_yield(object):
 
 
     def p_refresh(self):
+        global localtime, trade_period
+        localtime = time.localtime()
+        if (localtime.tm_hour == 9 and localtime.tm_min >= 30) or localtime.tm_hour == 10 or (localtime.tm_hour == 11 and localtime.tm_min < 30) or localtime.tm_hour == 13 or (localtime.tm_hour == 14 and localtime.tm_min < 57):
+            trade_period = True
+        else:
+            trade_period = False
+
         if len(self.add_new_signal) != 0:
             # 清空信号
             for i in range(len(self.add_new_signal) - 1, -1, -1):
@@ -656,24 +684,29 @@ class monitor_yield(object):
 
                     for contract in label_contracts_list:
                         for j, name in enumerate(self.p_names):
-                            if name not in ['总收益', '总Delta$(万)', '总Gamma$(万)', '总Vega$', '总Theta$', '当日最大总收益']:
-                                l = Label(self.p_root, text='',
-                                        textvariable=self.label_var[strategy][contract][name],
-                                        bg=color, font = font.Font(family='Arial', size=10))
+                            if name not in ['策略', '总收益', '总Delta$(万)', '总Gamma$(万)', '总Vega$', '总Theta$', '当日最大总收益']:
+                                bg_color = color
+                                # 熔断提示
+                                if contract[:6] == 'TC.O.S' and name == '合约':
+                                    opt = name_to_data(contract)
+                                    if opt.cb:
+                                        bg_color = '#FF0000'
+                                        self.if_position_cb = True
+                                l = Label(self.p_root, text='', textvariable=self.label_var[strategy][contract][name], bg=bg_color, font = font.Font(family='Arial', size=10))
                                 self.boxlist.append(l)
                                 l.grid(row=i, column=j, sticky=E + W)
 
+
                         i += 1
 
+                    l = Label(self.p_root, text=strategy, height=self.strategy_contain_contract_num[strategy], bg=color, font = font.Font(family='Arial', size=10))
+                    self.boxlist.append(l)
+                    l.grid(row=total_profit_row, column=0, rowspan=self.strategy_contain_contract_num[strategy], sticky=N + S + W + E)
+
                     for total in [(self.strategy2totalprofit, total_profit_position), (self.strategy2totaldelta, total_delta_position), (self.strategy2totalgamma, total_gamma_position), (self.strategy2totalvega, total_vega_position), (self.strategy2totaltheta, total_theta_position), (self.max_total_profit, max_total_profit_position)]:
-                        if total not in [(self.max_total_profit, max_total_profit_position)]:
-                            total[0][strategy] = StringVar(self.p_root)
-                        l = Label(self.p_root, text=1, height=self.strategy_contain_contract_num[strategy],
-                                    textvariable=total[0][strategy],bg=color, font = font.Font(family='Arial', size=10))
+                        l = Label(self.p_root, text=1, height=self.strategy_contain_contract_num[strategy], textvariable=total[0][strategy], bg=color, font = font.Font(family='Arial', size=10))
                         self.boxlist.append(l)
-                        l.grid(row=total_profit_row, column=total[1],
-                                rowspan=self.strategy_contain_contract_num[strategy]
-                                , sticky=N + S + W + E)
+                        l.grid(row=total_profit_row, column=total[1], rowspan=self.strategy_contain_contract_num[strategy], sticky=N + S + W + E)
                     total_profit_row += self.strategy_contain_contract_num[strategy]
 
 
@@ -687,12 +720,8 @@ class monitor_yield(object):
                 b.grid(row=i, column= j-1, columnspan=1, sticky=W, padx=10, pady=10)
                 self.boxlist.append(b)
 
-                b = Button(self.p_root, text='下单', width=10, command=self.open_order_ui)
-                b.grid(row=i, column= j-2, columnspan=1, sticky=W, padx=10, pady=10)
-                self.boxlist.append(b)
-
                 b = Button(self.p_root, text='对冲', width=10, command=self.open_hedge_ui)
-                b.grid(row=i, column= j-3, columnspan=1, sticky=W, padx=10, pady=10)
+                b.grid(row=i, column= j-2, columnspan=1, sticky=W, padx=10, pady=10)
                 self.boxlist.append(b)
 
             except:
@@ -703,57 +732,37 @@ class monitor_yield(object):
 
     def p_update(self, quote):
 
-        if quote['Bid'] == '' or quote['Ask'] == '' or quote["YClosedPrice"] == '':
-            return
-        BidPrice1 = float(quote['Bid'])
-        AskPrice1 = float(quote['Ask'])
-        LastPrice = (BidPrice1 + AskPrice1) / 2
-        if not quote["TradingPrice"] == '':
-            LastPrice = float(quote["TradingPrice"])
+        BidPrice1 = quote['Bid'] if quote['Bid'] == '' else float(quote['Bid'])
+        AskPrice1 = quote['Ask'] if quote['Ask'] == '' else float(quote['Ask'])
+        LastPrice = quote["TradingPrice"] if quote['TradingPrice'] == '' else float(quote['TradingPrice'])
+        avgP = quote['YClosedPrice'] if quote['YClosedPrice'] == '' else float(quote['YClosedPrice']) ## 实际录昨收盘价
         contract = quote['Symbol']
-        avgP = float(quote["YClosedPrice"]) ## 实际录昨收盘价
 
 
         if 'TC.O' in contract:
 
-            if 'TC.O.SSE.510050' in contract:
-                sty = StockType.etf50
-                mat = data_opt[sty]._2005_to_Mat[contract[18 : 22]]
-            elif 'TC.O.SSE.510300' in contract:
-                sty = StockType.h300
-                mat = data_opt[sty]._2005_to_Mat[contract[18 : 22]]
-            elif 'TC.O.SZSE.159919' in contract:
-                sty = StockType.s300
-                mat = data_opt[sty]._2005_to_Mat[contract[19 : 23]]
-            elif 'TC.O.CFFEX.IO' in contract:
-                sty = StockType.gz300
-                mat = data_opt[sty]._2005_to_Mat[contract[16 : 20]]
-
-            position = data_opt[sty].k_list[mat].index(float(contract[last_C_P(contract) : ]))
-            if '.C.' in contract:
-                se = 0
-            elif '.P.' in contract:
-                se = 1
+            opt = name_to_data(contract)
+            sty = opt.sty
+            mat = opt.mat
 
             # update data_opt
             # update OptionList
-            data_opt[sty].OptionList[mat][position][se].P = LastPrice
-            data_opt[sty].OptionList[mat][position][se].bid = BidPrice1
-            data_opt[sty].OptionList[mat][position][se].ask = AskPrice1
+            opt.P = LastPrice
+            opt.bid = BidPrice1
+            opt.ask = AskPrice1
             # update S, k0, posi
             data_opt[sty].S_k0_posi(mat)
-            data_opt[sty].OptionList[mat][position][se].S = data_opt[sty].S[mat]
+            opt.S = data_opt[sty].S[mat]
             # update time
-            t = time.localtime()
-            data_opt[sty].T[mat] = data_opt[sty].initT[mat] + ((15 - t.tm_hour - 1 - 1.5 * (t.tm_hour < 12)) * 60 * 60 + (60 - t.tm_min -1) * 60 + (60 - t.tm_sec) + 120) / (60 * 60 * 4 + 120) / 244
-            data_opt[sty].OptionList[mat][position][se].T = data_opt[sty].T[mat]
+            data_opt[sty].T[mat] = data_opt[sty].initT[mat] + ((15 - localtime.tm_hour - 1 - 1.5 * (localtime.tm_hour < 12)) * 60 * 60 + (60 - localtime.tm_min -1) * 60 + (60 - localtime.tm_sec) + 120) / (60 * 60 * 4 + 120) / 244
+            opt.T = data_opt[sty].T[mat]
             # update cb
-            if BidPrice1 == AskPrice1:
-                data_opt[sty].OptionList[mat][position][se].cb = True
+            if BidPrice1 == AskPrice1 and '' not in [BidPrice1, AskPrice1] and not [BidPrice1, AskPrice1] == [data_opt[sty].mc] * 2:
+                opt.cb = True
             else:
-                data_opt[sty].OptionList[mat][position][se].cb = False
+                opt.cb = False
             # yc master contract name
-            data_opt[sty].OptionList[mat][position][se].yc_master_contract = contract
+            opt.yc_master_contract = contract
 
         elif 'IF' in contract:
             mat_future = data_opt[FutureType.IF]._2005_to_Mat[contract[-4 : ]]
@@ -776,7 +785,20 @@ class monitor_yield(object):
             if self.load_file_signal:
                 return
 
-            t = time.localtime(); hour = t.tm_hour; _min = t.tm_min; sec = t.tm_sec
+            if not self.if_position_cb and 'TC.O.S' in contract and opt.cb and len([0 for s in list(self.label_var.keys()) if contract in list(self.label_var[s].keys())]) > 0:
+                self.add_new_signal.append(1)
+
+            if self.if_position_cb:
+                num = 0
+                for s in list(self.label_var.keys()):
+                    for c in list(self.label_var[s].keys()):
+                        if 'TC.O.S' in c:
+                            o = name_to_data(c)
+                            if o.cb:
+                                num += 1
+                if num == 0:
+                    self.if_position_cb = False
+                    self.add_new_signal.append(1)
 
             # greeks已更新flag
             hedge_strategy = None
@@ -792,7 +814,7 @@ class monitor_yield(object):
                     continue
 
                 # 录昨收
-                if (hour == 9 and _min < 31) or self.label_var[strategy][contract]['均价'].get() == '0':
+                if not avgP == '' and ((localtime.tm_hour == 9 and localtime.tm_min < 31) or self.label_var[strategy][contract]['均价'].get() == '0'):
                     self.label_var[strategy][contract]['均价'].set('{:g}'.format(avgP))
 
                 price_conver = 0
@@ -839,7 +861,7 @@ class monitor_yield(object):
                 if strategy in self.stop_update_max_profit.keys() and time.time() - self.stop_update_max_profit[strategy] > 5:
                     self.stop_update_max_profit.pop(strategy)
 
-                if (middle_price_profit > float(self.max_total_profit[strategy].get())) and (BidPrice1 != AskPrice1 or sty == StockType.gz300) and not ((hour == 8) or (hour == 9 and _min < 30) or (hour == 9 and _min == 30) or (hour == 11 and _min == 29) or (hour == 11 and _min >= 30) or hour == 12 or (hour == 13 and _min == 0)) and not quote["TradingPrice"] == "" and strategy not in self.stop_update_max_profit.keys():
+                if trade_period and not ((localtime.tm_hour == 9 and localtime.tm_min == 30) or (localtime.tm_hour == 11 and localtime.tm_min == 29) or (localtime.tm_hour == 13 and localtime.tm_min == 0)) and (middle_price_profit > float(self.max_total_profit[strategy].get())) and (BidPrice1 != AskPrice1 or sty == StockType.gz300) and not quote["TradingPrice"] == '' and strategy not in self.stop_update_max_profit.keys():
                     self.max_total_profit[strategy].set('{:g}'.format(int(middle_price_profit)))
 
                 # greeks
@@ -847,11 +869,11 @@ class monitor_yield(object):
                 
                 if 'TC.O' in contract:
 
-                    data_opt[sty].OptionList[mat][position][se]._iv = data_opt[sty].OptionList[mat][position][se].iv()
-                    delta = data_opt[sty].OptionList[mat][position][se].delta()
-                    gamma = data_opt[sty].OptionList[mat][position][se].gamma()
-                    vega = data_opt[sty].OptionList[mat][position][se].vega()
-                    theta = data_opt[sty].OptionList[mat][position][se].theta()
+                    opt._iv = opt.iv()
+                    delta = opt.delta()
+                    gamma = opt.gamma()
+                    vega = opt.vega()
+                    theta = opt.theta()
                 
                     self.label_var[strategy][contract]['delta$(万)'].set('{:.1f}'.format(vol * data_opt[sty].S[mat] * price_conver * delta / 10000))
                     self.label_var[strategy][contract]['gamma$(万)'].set('{:.1f}'.format(vol * data_opt[sty].S[mat] ** 2 * price_conver * gamma * 0.01 / 10000))
@@ -962,11 +984,11 @@ class monitor_yield(object):
         self.strategies = sorted(set(strategies), key=strategies.index)
 
         root = Toplevel()
-        self.root0 = root
+        self.root = root
         root.title('成交回报')
         self.main_root_position = self.main_root.winfo_geometry()
         index = [i for i, x in enumerate(self.main_root_position) if x == '+']
-        root.geometry("%dx%d+%d+%d" % (680, 500, int(self.main_root_position[index[0] + 1 : index[1]]), int(self.main_root_position[index[1] + 1 :]) + 100))
+        root.geometry("%dx%d+%d+%d" % (700, 500, int(self.main_root_position[index[0] + 1 : index[1]]) + 1100, int(self.main_root_position[index[1] + 1 :]) + 400))
         canvas = Canvas(root, borderwidth=0)
         frame = Frame(canvas)
         self.bs_root = frame
@@ -1016,7 +1038,6 @@ class monitor_yield(object):
             self.bs_boxlist = {}
 
 
-            j = 1
             for i, k1 in enumerate(list(self.buy_sell_var.keys())):
                 self.bs_boxlist[i] = []
                 for j, k2 in enumerate(list(self.buy_sell_var[k1].keys())):
@@ -1026,7 +1047,7 @@ class monitor_yield(object):
 
                 self.checkbutton_context_list[i] = {}
                 self.checkbutton_context_list[i][0] = IntVar(self.bs_root)
-                if self.buy_sell_var[k1]['策略'] == '未知': # 区分手动下单，自对冲下单和持仓软件端下单
+                if self.buy_sell_var[k1]['策略'] == '未知': # 内外部下单
                     l = Checkbutton(self.bs_root,variable=self.checkbutton_context_list[i][0])
                     l.grid(row=i + 1, column=j + 1, sticky=E + W, padx=10)
                 else:
@@ -1034,33 +1055,76 @@ class monitor_yield(object):
                     l = None
                 self.checkbutton_context_list[i][1] = l
                 self.bs_boxlist[i].append(l)
-                
 
-            if j != 0:
 
-                i = len(self.bs_boxlist)
-                self.bs_boxlist[i] = []
-                stg = StringVar()
-                stgChosen = ttk.Combobox(self.bs_root, width=10, textvariable=stg)
-                stgChosen['values'] = [strategy for strategy in self.strategies]  # 设置下拉列表的值
-                stgChosen.grid(row=i + 1, column=j-1, padx=5)  # 设置其在界面中出现的位置  column代表列   row 代表行
-                stgChosen.current(0)
-                self.bs_boxlist[i].append(stgChosen)
+            i = len(self.bs_boxlist)
+            self.bs_boxlist[i] = []
+            stg = StringVar()
+            stgChosen = ttk.Combobox(self.bs_root, width=10, textvariable=stg)
+            stgChosen['values'] = [strategy for strategy in self.strategies]
+            stgChosen.grid(row=i + 1, column=0, padx=5)
+            stgChosen.current(0)
+            self.bs_boxlist[i].append(stgChosen)
 
-                b = Button(self.bs_root, text="全选", command=self.all_select, width=10)
-                b.grid(row=i + 1, column=j, sticky=E, padx=5, pady=10)
-                self.bs_boxlist[i].append(b)
+            b = Button(self.bs_root, text="全选", command=self.all_select, width=10)
+            b.grid(row=i + 1, column=1, sticky=E, padx=5, pady=10)
+            self.bs_boxlist[i].append(b)
 
-                b = Button(self.bs_root, text="更新", command=self.bs_update_thread, width=10)
-                b.grid(row=i + 1, column=j+1, sticky=E, padx=5, pady=10)
-                self.bs_boxlist[i].append(b)
+            b = Button(self.bs_root, text="全不选", command=self.de_all_select, width=10)
+            b.grid(row=i + 1, column=2, sticky=E, padx=5, pady=10)
+            self.bs_boxlist[i].append(b)
 
-        self.bs_root.after(1500, self.bs_refresh) # when root destroyed, stops.
+            b = Button(self.bs_root, text="更新", command=self.bs_update_thread, width=10)
+            b.grid(row=i + 1, column=3, sticky=E, padx=5, pady=10)
+            self.bs_boxlist[i].append(b)
+
+
+            # 筛选成交回报
+            self.bs_boxlist[i+1] = []
+            sty = StringVar()
+            styChosen = ttk.Combobox(self.bs_root, width=10, textvariable=sty)
+            styChosen['values'] = ['510050', '510300', '159919', 'IO', 'IF', 'IH']
+            styChosen.grid(row=i + 2, column=0, padx=5)
+            styChosen.current(0)
+            self.bs_boxlist[i+1].append(styChosen)
+
+            mat = StringVar()
+            matChosen = ttk.Combobox(self.bs_root, width=10, textvariable=mat)
+            matChosen['values'] = ['']
+            matChosen.grid(row=i + 2, column=1, padx=5)
+            matChosen.current(0)
+            self.bs_boxlist[i+1].append(matChosen)
+
+            def func(*args):
+                if styChosen.get() == '510050':
+                    matlist = list(Mat['contract_format'][StockType.etf50].values())
+                elif styChosen.get() == '510300':
+                    matlist = list(Mat['contract_format'][StockType.h300].values())
+                elif styChosen.get() == '159919':
+                    matlist = list(Mat['contract_format'][StockType.s300].values())
+                elif styChosen.get() == 'IO':
+                    matlist = list(Mat['contract_format'][StockType.gz300].values())
+                elif styChosen.get() == 'IF':
+                    matlist = list(Mat['contract_format'][FutureType.IF].values())
+                elif styChosen.get() == 'IH':
+                    matlist = list(Mat['contract_format'][FutureType.IH].values())
+                else:
+                    matlist = []
+
+                matChosen['values'] = matlist
+
+            styChosen.bind("<<ComboboxSelected>>", func)
+
+            b = Button(self.bs_root, text='筛选', command=self.filter, width=10)
+            b.grid(row=i + 2, column=2, sticky=E, padx=5, pady=10)
+            self.bs_boxlist[i+1].append(b)
+
+        self.bs_root.after(2000, self.bs_refresh) # when root destroyed, stops.
 
 
     def check_buy_sell(self, quote):
 
-        print(quote)
+        self.order_data_txt.write(time.strftime('%H:%M:%S', localtime) + ' | ' + '(全) ' + str(quote) + '\n')
 
         if quote not in self.strategy_trade_return['all_data']:
             self.strategy_trade_return['all_data'].append(quote)
@@ -1085,8 +1149,10 @@ class monitor_yield(object):
 
         if strategy == '':
             outer = True
+            self.order_data_txt.write(time.strftime('%H:%M:%S', localtime) + ' | ' + '(外) ' + str(quote) + '\n')
         else:
             outer = False
+            self.order_data_txt.write(time.strftime('%H:%M:%S', localtime) + ' | ' + '(内) ' + str(quote) + '\n')
 
         if ExecType in ['3','6'] and not Price == 0.0:
             if id not in self.strategy_trade_return.keys():
@@ -1101,7 +1167,7 @@ class monitor_yield(object):
                 self.strategy_trade_return[id] = leavesqty
                 flag = True
 
-        # 对冲下单
+        # 内部下单
         if not outer:
             if ExecType == '5' and id not in self.strategy_trade_return['type5']:
                 if id not in self.strategy_trade_return.keys():
@@ -1115,7 +1181,7 @@ class monitor_yield(object):
 
 
         while flag:
-            print('更新会使用的成交回报：', quote)
+            self.order_data_txt.write(time.strftime('%H:%M:%S', localtime) + ' | ' + '(更新会使用的成交回报) ' + str(quote) + '\n')
 
             if Volume == 0 or Price == 0.0:
                 break
@@ -1127,13 +1193,13 @@ class monitor_yield(object):
             self.buy_sell_var[len(self.buy_sell_var)]['数量'] = Volume
             self.buy_sell_var[len(self.buy_sell_var)]['价格'] = '%f'%Price
             self.buy_sell_var[len(self.buy_sell_var)]['合约'] = contract
-            if outer: # 区分手动下单，自对冲下单和持仓软件端下单
+            if outer: # 内外部下单
                 self.buy_sell_var[len(self.buy_sell_var)]['策略'] = '未知'
             else:
                 self.buy_sell_var[len(self.buy_sell_var)]['策略'] = strategy
 
 
-            # 自对冲下单和持仓软件端下单 此处更新到盈利界面
+            # 内部下单，更新到盈利界面
             if not outer:
 
                 price_conver = 0
@@ -1191,7 +1257,8 @@ class monitor_yield(object):
 
         # 补单
         if not outer and ExecType in ['5', '8', '10'] and not id in self.hedge_addin_orderid:
-            print('需要补单的成交回报：', quote)
+            self.order_data_txt.write(time.strftime('%H:%M:%S', localtime) + ' | ' + '(需要补单的成交回报) ' + str(quote) + '\n')
+
             num_add = int(OriginalQty) - int(OrderQty)
 
             if Direction == 1:
@@ -1211,10 +1278,33 @@ class monitor_yield(object):
 
             self.order_api(contract, price, num_add, strategy)
 
+        self.order_data_txt.flush()
+
 
     def all_select(self):
         for k in self.checkbutton_context_list.keys():
-            if not self.checkbutton_context_list[k][1] == None: # 区分手动下单，自对冲下单和持仓软件端下单
+            if not self.checkbutton_context_list[k][1] == None: # 内外部下单
+                self.checkbutton_context_list[k][1].select()
+
+
+    def de_all_select(self):
+        for k in self.checkbutton_context_list.keys():
+            if not self.checkbutton_context_list[k][1] == None: #内外部下单
+                self.checkbutton_context_list[k][1].deselect()
+
+
+    def filter(self):
+
+        str_sty = self.bs_boxlist[len(self.bs_boxlist)-1][0].get()
+        str_mat = self.bs_boxlist[len(self.bs_boxlist)-1][1].get()
+
+        if '' in [str_sty, str_mat]:
+            return
+
+        for k in self.checkbutton_context_list.keys():
+            if not self.checkbutton_context_list[k][1] == None: # 内外部下单
+                contract = self.bs_boxlist[k][4].cget('text')
+                if str_sty in contract and str_mat in contract:
                     self.checkbutton_context_list[k][1].select()
 
 
@@ -1232,7 +1322,7 @@ class monitor_yield(object):
         if login_out != 'yes':
             return
 
-        strategy = self.bs_boxlist[len(self.bs_boxlist)-1][0].get()
+        strategy = self.bs_boxlist[len(self.bs_boxlist)-2][0].get()
         
         if strategy == '':
             return
@@ -1295,11 +1385,15 @@ class monitor_yield(object):
 
         for k in ks:
             self.buy_sell_var.pop(k)
+            self.checkbutton_context_list.pop(k-1)
         nums = [i+1 for i in range(len(self.buy_sell_var.keys()))]
         temp = {}
+        temp_c = {}
         for i,k in zip(nums,self.buy_sell_var.keys()):
             temp[i]=self.buy_sell_var[k]
+            temp_c[i - 1] = self.checkbutton_context_list[k - 1]
         self.buy_sell_var = temp
+        self.checkbutton_context_list = temp_c
 
         self.bs_refresh_signal.append(1)
 
@@ -1334,7 +1428,7 @@ class monitor_yield(object):
             if len(arrInfo) != 0:
                 strAccountMask = arrInfo[0]["AccountMask"]
 
-        print(g_TradeZMQ.position(g_TradeSession,strAccountMask,""))
+        g_TradeZMQ.position(g_TradeSession,strAccountMask,"")
 
         if num == 0:
             return
@@ -1358,7 +1452,7 @@ class monitor_yield(object):
         'UserKey1': strategy,
 
         }
-        print(g_TradeZMQ.new_order(g_TradeSession,Param))
+        g_TradeZMQ.new_order(g_TradeSession,Param)
 
 
     def open_hedge_ui(self):
@@ -1379,7 +1473,7 @@ class monitor_yield(object):
         root.title('对冲')
         self.main_root_position = self.main_root.winfo_geometry()
         index = [i for i, x in enumerate(self.main_root_position) if x == '+']
-        root.geometry("%dx%d+%d+%d" % (600, 200, int(self.main_root_position[index[0] + 1 : index[1]]), int(self.main_root_position[index[1] + 1 :]) + 100))
+        root.geometry("%dx%d+%d+%d" % (700, 300, int(self.main_root_position[index[0] + 1 : index[1]]), int(self.main_root_position[index[1] + 1 :]) + 100))
         canvas = Canvas(root, borderwidth=0)
         frame = Frame(canvas)
         self.hg_root = frame
@@ -1402,8 +1496,8 @@ class monitor_yield(object):
         lb_stg.grid(row=1, column=1)
         stg = StringVar()
         stgChosen = ttk.Combobox(self.hg_root, width=10, textvariable=stg)
-        stgChosen['values'] = strategies # 设置下拉列表的值
-        stgChosen.grid(column=1, row=2, padx=5) # 设置其在界面中出现的位置  column代表列   row 代表行
+        stgChosen['values'] = strategies
+        stgChosen.grid(column=1, row=2, padx=5)
         stgChosen.current(0)
         self.hg_boxlist[0].append(stgChosen)
 
@@ -1411,8 +1505,8 @@ class monitor_yield(object):
         lb_grk.grid(row=1, column=2)
         grk = StringVar()
         grkChosen = ttk.Combobox(self.hg_root, width=10, textvariable=grk)
-        grkChosen['values'] = ['delta$(万)'] # ['gamma$(万)', 'vega$', 'theta$']  # 设置下拉列表的值
-        grkChosen.grid(column=2, row=2, padx=5) # 设置其在界面中出现的位置  column代表列   row 代表行
+        grkChosen['values'] = ['delta$(万)']
+        grkChosen.grid(column=2, row=2, padx=5)
         grkChosen.current(0)
         self.hg_boxlist[0].append(grkChosen)
 
@@ -1420,26 +1514,124 @@ class monitor_yield(object):
         lb_thred.grid(row=1, column=3)
         thred = StringVar()
         thredEntry = ttk.Entry(self.hg_root, width=10, textvariable=thred)
-        thredEntry.grid(column=3, row=2, padx=5) # 设置其在界面中出现的位置  column代表列   row 代表行
+        thredEntry.grid(column=3, row=2, padx=5)
         self.hg_boxlist[0].append(thredEntry)
 
         lb_way = ttk.Label(self.hg_root, text = '方式')
         lb_way.grid(row=1, column=4)
         way = StringVar()
         wayChosen = ttk.Combobox(self.hg_root, width=10, textvariable=way)
-        wayChosen['values'] = ['合成', '先期货后合成'] # 设置下拉列表的值
-        wayChosen.grid(column=4, row=2, padx=5) # 设置其在界面中出现的位置  column代表列   row 代表行
+        wayChosen['values'] = ['合成', '先期货后合成']
+        wayChosen.grid(column=4, row=2, padx=5)
         wayChosen.current(0)
         self.hg_boxlist[0].append(wayChosen)
 
 
-        b = Button(self.hg_root, text="对冲", command=self.hedge_thread, width=10)
+        self.hedge_state = StringVar()
+        self.hedge_state.set('对冲')
+        b = Button(self.hg_root, textvariable=self.hedge_state, command=self.hedge_thread, width=10)
         b.grid(row=2, column=5, sticky=E, padx=5, pady=10)
-        self.hg_boxlist[0].append(b)
 
         b = Button(self.hg_root, text="停止对冲", command=self.stop_hedge, width=10)
         b.grid(row=2, column=6, sticky=E, padx=5, pady=10)
-        self.hg_boxlist[0].append(b)
+
+
+        # 手动板
+        l = ttk.Label(self.hg_root, text = '手动模式')
+        l.grid(row=1, column=7, sticky=E, padx=10)
+        self.hg_boxlist['mm'] = IntVar(self.hg_root)
+        l = Checkbutton(self.hg_root,variable=self.hg_boxlist['mm'])
+        l.grid(row=2, column=7, sticky=E + W, padx=10)
+
+        l = ttk.Label(self.hg_root, text = 'M1')
+        l.grid(row=3, column=2)
+        l = ttk.Label(self.hg_root, text = 'M2')
+        l.grid(row=3, column=3)
+        l = ttk.Label(self.hg_root, text = 'M3')
+        l.grid(row=3, column=4)
+        l = ttk.Label(self.hg_root, text = 'Q1')
+        l.grid(row=3, column=5)
+        l = ttk.Label(self.hg_root, text = 'Q2')
+        l.grid(row=3, column=6)
+        l = ttk.Label(self.hg_root, text = 'Q3')
+        l.grid(row=3, column=7)
+
+        l = ttk.Label(self.hg_root, text = 'IF')
+        l.grid(row=4, column=1)
+        l = ttk.Label(self.hg_root, text = 'IH')
+        l.grid(row=5, column=1)
+        l = ttk.Label(self.hg_root, text = '50E')
+        l.grid(row=6, column=1)
+        l = ttk.Label(self.hg_root, text = '沪E')
+        l.grid(row=7, column=1)
+        l = ttk.Label(self.hg_root, text = '深E')
+        l.grid(row=8, column=1)
+        l = ttk.Label(self.hg_root, text = '股指')
+        l.grid(row=9, column=1)
+
+        self.hg_boxlist[FutureType.IF] = IntVar(self.hg_root)
+        l = Radiobutton(self.hg_root,variable=self.hg_boxlist[FutureType.IF],value=1)
+        l.grid(row=4, column=2, sticky=E + W, padx=10)
+        l = Radiobutton(self.hg_root,variable=self.hg_boxlist[FutureType.IF],value=2)
+        l.grid(row=4, column=3, sticky=E + W, padx=10)
+        l = Radiobutton(self.hg_root,variable=self.hg_boxlist[FutureType.IF],value=4)
+        l.grid(row=4, column=5, sticky=E + W, padx=10)
+        l = Radiobutton(self.hg_root,variable=self.hg_boxlist[FutureType.IF],value=5)
+        l.grid(row=4, column=6, sticky=E + W, padx=10)
+
+        self.hg_boxlist[FutureType.IH] = IntVar(self.hg_root)
+        l = Radiobutton(self.hg_root,variable=self.hg_boxlist[FutureType.IH],value=1)
+        l.grid(row=5, column=2, sticky=E + W, padx=10)
+        l = Radiobutton(self.hg_root,variable=self.hg_boxlist[FutureType.IH],value=2)
+        l.grid(row=5, column=3, sticky=E + W, padx=10)
+        l = Radiobutton(self.hg_root,variable=self.hg_boxlist[FutureType.IH],value=4)
+        l.grid(row=5, column=5, sticky=E + W, padx=10)
+        l = Radiobutton(self.hg_root,variable=self.hg_boxlist[FutureType.IH],value=5)
+        l.grid(row=5, column=6, sticky=E + W, padx=10)
+
+        self.hg_boxlist[StockType.etf50] = {Maturity.M1: IntVar(self.hg_root), Maturity.M2: IntVar(self.hg_root), Maturity.Q1: IntVar(self.hg_root), Maturity.Q2: IntVar(self.hg_root)}
+        l = Checkbutton(self.hg_root,variable=self.hg_boxlist[StockType.etf50][Maturity.M1])
+        l.grid(row=6, column=2, sticky=E + W, padx=10)
+        l = Checkbutton(self.hg_root,variable=self.hg_boxlist[StockType.etf50][Maturity.M2])
+        l.grid(row=6, column=3, sticky=E + W, padx=10)
+        l = Checkbutton(self.hg_root,variable=self.hg_boxlist[StockType.etf50][Maturity.Q1])
+        l.grid(row=6, column=5, sticky=E + W, padx=10)
+        l = Checkbutton(self.hg_root,variable=self.hg_boxlist[StockType.etf50][Maturity.Q2])
+        l.grid(row=6, column=6, sticky=E + W, padx=10)
+
+        self.hg_boxlist[StockType.h300] = {Maturity.M1: IntVar(self.hg_root), Maturity.M2: IntVar(self.hg_root), Maturity.Q1: IntVar(self.hg_root), Maturity.Q2: IntVar(self.hg_root)}
+        l = Checkbutton(self.hg_root,variable=self.hg_boxlist[StockType.h300][Maturity.M1])
+        l.grid(row=7, column=2, sticky=E + W, padx=10)
+        l = Checkbutton(self.hg_root,variable=self.hg_boxlist[StockType.h300][Maturity.M2])
+        l.grid(row=7, column=3, sticky=E + W, padx=10)
+        l = Checkbutton(self.hg_root,variable=self.hg_boxlist[StockType.h300][Maturity.Q1])
+        l.grid(row=7, column=5, sticky=E + W, padx=10)
+        l = Checkbutton(self.hg_root,variable=self.hg_boxlist[StockType.h300][Maturity.Q2])
+        l.grid(row=7, column=6, sticky=E + W, padx=10)
+
+        self.hg_boxlist[StockType.s300] = {Maturity.M1: IntVar(self.hg_root), Maturity.M2: IntVar(self.hg_root), Maturity.Q1: IntVar(self.hg_root), Maturity.Q2: IntVar(self.hg_root)}
+        l = Checkbutton(self.hg_root,variable=self.hg_boxlist[StockType.s300][Maturity.M1])
+        l.grid(row=8, column=2, sticky=E + W, padx=10)
+        l = Checkbutton(self.hg_root,variable=self.hg_boxlist[StockType.s300][Maturity.M2])
+        l.grid(row=8, column=3, sticky=E + W, padx=10)
+        l = Checkbutton(self.hg_root,variable=self.hg_boxlist[StockType.s300][Maturity.Q1])
+        l.grid(row=8, column=5, sticky=E + W, padx=10)
+        l = Checkbutton(self.hg_root,variable=self.hg_boxlist[StockType.s300][Maturity.Q2])
+        l.grid(row=8, column=6, sticky=E + W, padx=10)
+
+        self.hg_boxlist[StockType.gz300] = {Maturity.M1: IntVar(self.hg_root), Maturity.M2: IntVar(self.hg_root), Maturity.M3: IntVar(self.hg_root), Maturity.Q1: IntVar(self.hg_root), Maturity.Q2: IntVar(self.hg_root), Maturity.Q3: IntVar(self.hg_root)}
+        l = Checkbutton(self.hg_root,variable=self.hg_boxlist[StockType.gz300][Maturity.M1])
+        l.grid(row=9, column=2, sticky=E + W, padx=10)
+        l = Checkbutton(self.hg_root,variable=self.hg_boxlist[StockType.gz300][Maturity.M2])
+        l.grid(row=9, column=3, sticky=E + W, padx=10)
+        l = Checkbutton(self.hg_root,variable=self.hg_boxlist[StockType.gz300][Maturity.M3])
+        l.grid(row=9, column=4, sticky=E + W, padx=10)
+        l = Checkbutton(self.hg_root,variable=self.hg_boxlist[StockType.gz300][Maturity.Q1])
+        l.grid(row=9, column=5, sticky=E + W, padx=10)
+        l = Checkbutton(self.hg_root,variable=self.hg_boxlist[StockType.gz300][Maturity.Q2])
+        l.grid(row=9, column=6, sticky=E + W, padx=10)
+        l = Checkbutton(self.hg_root,variable=self.hg_boxlist[StockType.gz300][Maturity.Q3])
+        l.grid(row=9, column=7, sticky=E + W, padx=10)
 
         def callback():
             self.stop_hedge()
@@ -1470,9 +1662,12 @@ class monitor_yield(object):
         self.hedge_ongoing_flag = True
         self.hedge_ongoing = self.hg_root.after(500, self.hedge)
 
+        if self.hedge_state.get() == '对冲':
+            self.hedge_state.set('对冲中......')
 
-        print('hedging.........')
 
+        if not trade_period or (localtime.tm_hour == 11 and localtime.tm_min > 26) or (localtime.tm_hour == 13 and localtime.tm_min < 3):
+            return
 
         if hedge_strategy in self.order_for_hedge.keys():
             return
@@ -1484,10 +1679,7 @@ class monitor_yield(object):
             return
 
 
-        print('new judgement round.........')
-        print('order for hedge before judgement: ', self.order_for_hedge)
-        print('Ft for which: ', self.Ft_for_which)
-        print('Opt for which: ', self.Opt_for_which)
+        self.hedge_data_txt.write(time.strftime('%H:%M:%S', localtime) + ' | ' + '对冲判断前......' + '\n' + 'order for hedge：' + str(self.order_for_hedge) + '\n' + 'Ft for which：' + str(self.Ft_for_which) + '\n' + 'Opt for which：' + str(self.Opt_for_which) + '\n')
 
 
         self.order_for_hedge[hedge_strategy] = {}
@@ -1505,6 +1697,9 @@ class monitor_yield(object):
                 else:
                     future_type = FutureType.IF
                 mat_future = data_opt[future_type].matlist[np.argmin(abs(np.array([int(Mat['contract_format'][future_type][mat0]) for mat0 in data_opt[future_type].matlist]) - int(Mat['contract_format'][sty][mat])))]
+                if hedge_way == '先期货后合成' and self.hg_boxlist['mm'].get():
+                    if not self.hg_boxlist[future_type].get() == 0:
+                        mat_future = Maturity(self.hg_boxlist[future_type].get())
 
 
                 # 期货对冲
@@ -1513,23 +1708,15 @@ class monitor_yield(object):
                     pre_future = sum([self.Ft_for_which[(hedge_strategy, sty, mat)][mat_from_future] * data_opt[future_type].midbidaskspread(mat_from_future) * data_opt[future_type].cm * 1 / 10000 for mat_from_future in self.Ft_for_which[(hedge_strategy, sty, mat)].keys()])
 
                 def of(oo: tuple):
-                    if 'TC.O.SSE.510050' in oo[2][0]:
-                        used_sty = StockType.etf50
-                        used_mat = data_opt[used_sty]._2005_to_Mat[oo[2][0][18 : 22]]
-                    elif 'TC.O.SSE.510300' in oo[2][0]:
-                        used_sty = StockType.h300
-                        used_mat = data_opt[used_sty]._2005_to_Mat[oo[2][0][18 : 22]]
-                    elif 'TC.O.SZSE.159919' in oo[2][0]:
-                        used_sty = StockType.s300
-                        used_mat = data_opt[used_sty]._2005_to_Mat[oo[2][0][19 : 23]]
-                    elif 'TC.O.CFFEX.IO' in oo[2][0]:
-                        used_sty = StockType.gz300
-                        used_mat = data_opt[used_sty]._2005_to_Mat[oo[2][0][16 : 20]]
-                    position_c = data_opt[used_sty].k_list[used_mat].index(float(oo[2][0][last_C_P(oo[2][0]) : ]))
+                    opt_c = name_to_data(oo[2][0])
+                    used_sty = opt_c.sty
+                    used_mat = opt_c.mat
                     position_p = data_opt[used_sty].k_list[used_mat].index(float(oo[2][1][last_C_P(oo[2][1]) : ]))
-                    data_opt[used_sty].OptionList[used_mat][position_c][0]._iv = data_opt[used_sty].OptionList[used_mat][position_c][0].iv()
-                    data_opt[used_sty].OptionList[used_mat][position_p][1]._iv = data_opt[used_sty].OptionList[used_mat][position_p][1].iv()
-                    return data_opt[used_sty].S[used_mat] * data_opt[used_sty].cm * (data_opt[used_sty].OptionList[used_mat][position_c][0].delta() - data_opt[used_sty].OptionList[used_mat][position_p][1].delta()) / 10000
+                    opt_p = data_opt[used_sty].OptionList[used_mat][position_p][1]
+
+                    opt_c._iv = opt_c.iv()
+                    opt_p._iv = opt_p.iv()
+                    return data_opt[used_sty].S[used_mat] * data_opt[used_sty].cm * (opt_c.delta() - opt_p.delta()) / 10000
 
                 pre_option = 0
                 if (hedge_strategy, sty, mat) in self.Opt_for_which_copy.keys():
@@ -1554,10 +1741,9 @@ class monitor_yield(object):
                     if br:
                         break
 
-                    mat_list = [mat, mat]
-                    ml = [mat0 for mat0 in data_opt[hedge_sty].matlist if abs(Mat['calendar'][hedge_sty][mat0].month - Mat['calendar'][sty][mat].month)%10 == 1]
-                    if not ml == []:
-                        mat_list[1] = ml[0]
+                    mat_list = [Maturity.M1, Maturity.M2]
+                    if self.hg_boxlist['mm'].get():
+                        mat_list = [mm_mat for mm_mat in list(self.hg_boxlist[hedge_sty].keys()) if self.hg_boxlist[hedge_sty][mm_mat].get()]
 
                     for z, hedge_mat in enumerate(mat_list):
                         if br:
@@ -1572,7 +1758,7 @@ class monitor_yield(object):
 
                         for hedge_k in try_k_list:
                             # 未熔断 and 流动性好
-                            if [True, True] == [True for i in range(2) if hedge_k[i].cb == False and hedge_k[i].ask - hedge_k[i].bid < data_opt[hedge_sty].mc * data_opt[hedge_sty].tick_limit and hedge_k[i].P > data_opt[hedge_sty].p_limit]:
+                            if [True, True] == [True for i in range(2) if hedge_k[i].cb == False and '' not in [hedge_k[i].ask, hedge_k[i].bid] and 'A' not in hedge_k[i].yc_master_contract and hedge_k[i].ask - hedge_k[i].bid < data_opt[hedge_sty].mc * data_opt[hedge_sty].tick_limit and hedge_k[i].P > data_opt[hedge_sty].p_limit]:
                                 hedge_k[0]._iv = hedge_k[0].iv()
                                 hedge_k[1]._iv = hedge_k[1].iv()
                                 greeks_c = data_opt[hedge_sty].S[hedge_mat] * data_opt[hedge_sty].cm * hedge_k[0].delta() / 10000
@@ -1625,9 +1811,9 @@ class monitor_yield(object):
                         self.Opt_for_which[(hedge_strategy, sty, mat)][option_chosen] -= num_opt
 
 
-        print('order for hedge -- ' + hedge_strategy, self.order_for_hedge[hedge_strategy])
-        print('Ft for which: ', self.Ft_for_which)
-        print('Opt for which: ', self.Opt_for_which)
+        self.hedge_data_txt.write(time.strftime('%H:%M:%S', localtime) + ' | ' + '对冲判断后......' + '\n' + 'order for hedge：' + hedge_strategy + str(self.order_for_hedge[hedge_strategy]) + '\n' + 'Ft for which：' + str(self.Ft_for_which) + '\n' + 'Opt for which：' + str(self.Opt_for_which) + '\n')
+        self.hedge_data_txt.flush()
+
 
         # 下单
         for target in self.order_for_hedge[hedge_strategy].keys():
@@ -1650,210 +1836,8 @@ class monitor_yield(object):
 
         if self.hedge_ongoing_flag:
             self.hg_root.after_cancel(self.hedge_ongoing)
+            self.hedge_state.set('对冲')
             self.hedge_ongoing_flag = False
-
-
-    ##############################################################################################################
-    def open_order_ui(self):
-
-        if self.od_root_flag:
-            return
-        self.init_order_ui()
-
-
-    def init_order_ui(self):
-        self.od_boxlist = {0:[]}
-
-        strategies = []
-        with open('./strategies.txt', 'r', encoding='utf-8') as f:
-            lines = f.readlines()
-            for strategy in lines:
-                strategies.append(strategy.replace('\n',''))
-
-        strategies = sorted(set(strategies), key=strategies.index)
-
-        root = Toplevel()
-        root.title('下单')
-        self.main_root_position = self.main_root.winfo_geometry()
-        index = [i for i, x in enumerate(self.main_root_position) if x == '+']
-        root.geometry("%dx%d+%d+%d" % (1100, 200, int(self.main_root_position[index[0] + 1 : index[1]]), int(self.main_root_position[index[1] + 1 :]) + 100))
-        canvas = Canvas(root, borderwidth=0)
-        frame = Frame(canvas)
-        self.od_root = frame
-        self.od_root_flag = True
-        vsb = Scrollbar(root, orient="vertical", command=canvas.yview)
-        canvas.configure(yscrollcommand=vsb.set)
-
-        vsb.pack(side="right", fill="y")
-        canvas.pack(side="left", fill="both", expand=True)
-        canvas.create_window((4, 4), window=frame, anchor="nw")
-
-        def onFrameConfigure(canvas):
-            '''Reset the scroll region to encompass the inner frame'''
-            canvas.configure(scrollregion=canvas.bbox("all"))
-
-        frame.bind("<Configure>", lambda event, canvas=canvas: onFrameConfigure(canvas))
-
-
-        lb_stg = ttk.Label(self.od_root, text = '策略')
-        lb_stg.grid(row=1, column=1)
-        stg = StringVar()
-        stgChosen = ttk.Combobox(self.od_root, width=10, textvariable=stg)
-        stgChosen['values'] = strategies  # 设置下拉列表的值
-        stgChosen.grid(column=1, row=2, padx=5)  # 设置其在界面中出现的位置  column代表列   row 代表行
-        stgChosen.current(0)
-        self.od_boxlist[0].append(stgChosen)
-
-
-        lb_sty = ttk.Label(self.od_root, text = '品种')
-        lb_sty.grid(row=1, column=2)
-        sty = StringVar()
-        styChosen = ttk.Combobox(self.od_root, width=10, textvariable=sty)
-        styChosen['values'] = ['50E', '沪E', '深E', '股指', 'IF', 'IH']  # 设置下拉列表的值
-        styChosen.grid(column=2, row=2, padx=5)  # 设置其在界面中出现的位置  column代表列   row 代表行
-        styChosen.current(0)
-        self.od_boxlist[0].append(styChosen)
-
-
-        lb_mat = ttk.Label(self.od_root, text = '月份')
-        lb_mat.grid(row=1, column=3)
-        mat = StringVar()
-        matChosen = ttk.Combobox(self.od_root, width=10, textvariable=mat)
-        matChosen['values'] = ['']  # 设置下拉列表的值
-        matChosen.grid(column=3, row=2, padx=5)  # 设置其在界面中出现的位置  column代表列   row 代表行
-        matChosen.current(0)
-        self.od_boxlist[0].append(matChosen)
-
-        def func2(*args):
-            if styChosen.get() == '50E':
-                matlist = list(Mat['contract_format'][StockType.etf50].values())
-            elif styChosen.get() == '沪E':
-                matlist = list(Mat['contract_format'][StockType.h300].values())
-            elif styChosen.get() == '深E':
-                matlist = list(Mat['contract_format'][StockType.s300].values())
-            elif styChosen.get() == '股指':
-                matlist = list(Mat['contract_format'][StockType.gz300].values())
-            elif styChosen.get() == 'IF':
-                matlist = list(Mat['contract_format'][FutureType.IF].values())
-            elif styChosen.get() == 'IH':
-                matlist = list(Mat['contract_format'][FutureType.IH].values())
-            else:
-                matlist = []
-
-            matChosen['values'] = matlist  # 设置下拉列表的值
-
-        styChosen.bind("<<ComboboxSelected>>", func2)
-
-
-        lb_opts = ttk.Label(self.od_root, text = '合约')
-        lb_opts.grid(row=1, column=4)
-        opts = StringVar()
-        optsChosen = ttk.Combobox(self.od_root, width=30, textvariable=opts)
-        optsChosen['values'] = ['']  # 设置下拉列表的值
-        optsChosen.grid(column=4, row=2, padx=5)  # 设置其在界面中出现的位置  column代表列   row 代表行
-        optsChosen.current(0)
-        self.od_boxlist[0].append(optsChosen)
-
-        def func3(*args):
-            if styChosen.get() == '50E':
-                opt_name = 'TC.O.SSE.510050'
-            elif styChosen.get() == '沪E':
-                opt_name = 'TC.O.SSE.510300'
-            elif styChosen.get() == '深E':
-                opt_name = 'TC.O.SZSE.159919'
-            elif styChosen.get() == '股指':
-                opt_name = 'TC.O.CFFEX.IO'
-            elif styChosen.get() == 'IF':
-                opt_name = 'TC.F.CFFEX.IF'
-            elif styChosen.get() == 'IH':
-                opt_name = 'TC.F.CFFEX.IH'
-            
-            mat_name = matChosen.get()
-
-            optslist = []
-            for i in QuoteID:
-                if opt_name in i and str(mat_name) in i:
-                    optslist += [i]
-
-            optsChosen['values'] = sorted(optslist)  # 设置下拉列表的值
-
-        matChosen.bind("<<ComboboxSelected>>", func3)
-
-
-        lb_drt = ttk.Label(self.od_root, text = '方向')
-        lb_drt.grid(row=1, column=5)
-        drt = StringVar()
-        drtChosen = ttk.Combobox(self.od_root, width=10, textvariable=drt)
-        drtChosen['values'] = ['Buy', 'Sell']  # 设置下拉列表的值
-        drtChosen.grid(column=5, row=2, padx=5)  # 设置其在界面中出现的位置  column代表列   row 代表行
-        drtChosen.current(0)
-        self.od_boxlist[0].append(drtChosen)
-
-
-        lb_prc = ttk.Label(self.od_root, text = '价格')
-        lb_prc.grid(row=1, column=6)
-        prc = StringVar()
-        prcChosen = ttk.Combobox(self.od_root, width=10, textvariable=prc)
-        prcChosen['values'] = ['限价', 'BID+1T', 'BID+2T', 'BID-1T', 'BID-2T', 'ASK+1T', 'ASK+2T', 'ASK-1T', 'ASK-2T']  # 设置下拉列表的值
-        prcChosen.grid(column=6, row=2, padx=5)  # 设置其在界面中出现的位置  column代表列   row 代表行
-        prcChosen.current(0)
-        self.od_boxlist[0].append(prcChosen)
-
-
-        lb_limit = ttk.Label(self.od_root, text = '限价')
-        lb_limit.grid(row=1, column=7)
-        limit = StringVar()
-        limitEntry = ttk.Entry(self.od_root, width=10, textvariable=limit)
-        limitEntry.grid(column=7, row=2, padx=5)  # 设置其在界面中出现的位置  column代表列   row 代表行
-        self.od_boxlist[0].append(limitEntry)
-
-
-        lb_num = ttk.Label(self.od_root, text = '数量')
-        lb_num.grid(row=1, column=8)
-        num = StringVar()
-        numEntry = ttk.Entry(self.od_root, width=10, textvariable=num)
-        numEntry.grid(column=8, row=2, padx=5)  # 设置其在界面中出现的位置  column代表列   row 代表行
-        self.od_boxlist[0].append(numEntry)
-
-
-        b = Button(self.od_root, text="下单", command=self.order, width=10)
-        b.grid(row=2, column=9, sticky=E, padx=5, pady=10)
-        self.od_boxlist[0].append(b)
-
-        def callback():
-            root.destroy()
-            self.od_root_flag = False
-        root.protocol("WM_DELETE_WINDOW", callback)
-        root.mainloop()
-
-
-    def order(self):
-
-        strategy = self.od_boxlist[0][0].get()
-        target = self.od_boxlist[0][3].get()
-        if target == '':
-            return
-
-        if self.od_boxlist[0][5].get() == '限价':
-            price = self.od_boxlist[0][6].get()
-            try: 
-                float(price)
-            except: 
-                return
-        else:
-            price = self.od_boxlist[0][5].get()
-
-        if self.od_boxlist[0][4].get() == 'Buy':
-            mp = 1
-        elif self.od_boxlist[0][4].get() == 'Sell':
-            mp = -1
-            
-        try: 
-            num = int(self.od_boxlist[0][7].get()) * mp
-        except: 
-            return
-        
-        self.order_api(target, price, num, strategy)
 
 
     ##############################################################################################################
@@ -1897,8 +1881,8 @@ class monitor_yield(object):
 
         stg = StringVar()
         stgChosen = ttk.Combobox(self.mp_root, width=10, textvariable=stg)
-        stgChosen['values'] = strategies  # 设置下拉列表的值
-        stgChosen.grid(column=1, row=1, padx=5)  # 设置其在界面中出现的位置  column代表列   row 代表行
+        stgChosen['values'] = strategies
+        stgChosen.grid(column=1, row=1, padx=5)
         stgChosen.current(0)
         self.mp_boxlist[0].append(stgChosen)
 
@@ -1906,36 +1890,35 @@ class monitor_yield(object):
             stg_name = stgChosen.get()
             contract = []
             contract += sorted(list(self.label_var[stg_name].keys()))
-            ctChosen['values'] = contract  # 设置下拉列表的值
+            ctChosen['values'] = contract
 
         stgChosen.bind("<<ComboboxSelected>>", func)
 
 
         ct = StringVar()
         ctChosen = ttk.Combobox(self.mp_root, width=30, textvariable=ct)
-        ctChosen['values'] = contract  # 设置下拉列表的值
-        ctChosen.grid(column=2, row=1, padx=5)  # 设置其在界面中出现的位置  column代表列   row 代表行
+        ctChosen['values'] = contract
+        ctChosen.grid(column=2, row=1, padx=5)
         ctChosen.current(0)
         self.mp_boxlist[0].append(ctChosen)
 
 
         param = StringVar()
         paramChosen = ttk.Combobox(self.mp_root, width=10, textvariable=param)
-        paramChosen['values'] = ['持仓数', '均价', '平仓损益', '当日最大总收益']  # 设置下拉列表的值
-        paramChosen.grid(column=3, row=1, padx=5)  # 设置其在界面中出现的位置  column代表列   row 代表行
+        paramChosen['values'] = ['持仓数', '均价', '平仓损益', '当日最大总收益']
+        paramChosen.grid(column=3, row=1, padx=5)
         paramChosen.current(0)
         self.mp_boxlist[0].append(paramChosen)
 
 
         dt = StringVar()
         dtEntry = ttk.Entry(self.mp_root, width=10, textvariable=dt)
-        dtEntry.grid(column=4, row=1, padx=5)  # 设置其在界面中出现的位置  column代表列   row 代表行
+        dtEntry.grid(column=4, row=1, padx=5)
         self.mp_boxlist[0].append(dtEntry)
 
 
         b = Button(self.mp_root, text="更新", command=self.modify_param, width=10)
         b.grid(row=1, column=5, sticky=E, padx=5, pady=10)
-        self.mp_boxlist[0].append(b)
 
         def callback():
             root.destroy()
@@ -1998,8 +1981,6 @@ def trade_sub_th(obj,sub_port,filter = ""):
 
 def quote_sub_th(obj,q_data,filter = ""):
     socket_sub = obj.context.socket(zmq.SUB)
-    #socket_sub.RCVTIMEO=7000
-    #print(sub_port)
     socket_sub.connect("tcp://127.0.0.1:%s" % q_data["SubPort"])
     socket_sub.setsockopt_string(zmq.SUBSCRIBE,filter)
     while(True):
@@ -2010,7 +1991,6 @@ def quote_sub_th(obj,q_data,filter = ""):
         message = (socket_sub.recv()[:-1]).decode("utf-8")
         index =  re.search(":",message).span()[1]  # filter
         symbol = message[:index-1]
-        # print("symbol get ",symbol)
 
         message = message[index:]
         message = json.loads(message)
@@ -2064,6 +2044,37 @@ def last_C_P(string: str):
     while (string[num] != 'C' and string[num] != 'P'):
         num -= 1
     return num + 2
+
+def name_to_data(yc_master_contract: str):
+    if 'TC.O.SSE.510050' in yc_master_contract:
+        sty = StockType.etf50
+        if yc_master_contract[15] == 'A':
+            mat = data_opt[sty]._2005_to_Mat[yc_master_contract[19 : 23]]
+        else:
+            mat = data_opt[sty]._2005_to_Mat[yc_master_contract[18 : 22]]
+    elif 'TC.O.SSE.510300' in yc_master_contract:
+        sty = StockType.h300
+        if yc_master_contract[15] == 'A':
+            mat = data_opt[sty]._2005_to_Mat[yc_master_contract[19 : 23]]
+        else:
+            mat = data_opt[sty]._2005_to_Mat[yc_master_contract[18 : 22]]
+    elif 'TC.O.SZSE.159919' in yc_master_contract:
+        sty = StockType.s300
+        if yc_master_contract[16] == 'A':
+            mat = data_opt[sty]._2005_to_Mat[yc_master_contract[20 : 24]]
+        else:
+            mat = data_opt[sty]._2005_to_Mat[yc_master_contract[19 : 23]]
+    elif 'TC.O.CFFEX.IO' in yc_master_contract:
+        sty = StockType.gz300
+        mat = data_opt[sty]._2005_to_Mat[yc_master_contract[16 : 20]]
+
+    position = data_opt[sty].k_list[mat].index(float(yc_master_contract[last_C_P(yc_master_contract) : ]))
+    if '.C.' in yc_master_contract:
+        se = 0
+    elif '.P.' in yc_master_contract:
+        se = 1
+
+    return data_opt[sty].OptionList[mat][position][se]
 
 def sub_all_options():
     global QuoteID
@@ -2135,8 +2146,8 @@ def sub_all_options():
             k *= 1000
             if not ((k <= 3000 and k % 50 == 0) or (k > 3000 and k <= 5000 and k % 100 == 0) or (k > 5000 and k <= 10000 and k % 250 == 0) or (k > 10000 and k <= 20000 and k % 500 == 0) or (k > 20000 and k <= 50000 and k % 1000 == 0) or (k > 50000 and k <= 100000 and k % 2500 == 0) or (k > 100000 and k % 5000 == 0)):
                 delect_index_list.append(posi)
-    for i in sorted(delect_index_list, reverse = True):
-        QuoteID.pop(i)
+    #for i in sorted(delect_index_list, reverse = True):
+        #QuoteID.pop(i)
 
     for sty in [StockType.etf50, StockType.h300, StockType.s300, StockType.gz300]:
         data_opt[sty] = OptData(sty)
@@ -2171,9 +2182,6 @@ def main():
 
     t_data = g_TradeZMQ.trade_connect("51848") # 公版
     q_data = g_QuoteZMQ.quote_connect("51878")
-
-    #t_data = g_TradeZMQ.trade_connect("51879") # 方正
-    #q_data = g_QuoteZMQ.quote_connect("51909")
 
     #t_data = g_TradeZMQ.trade_connect("51492") # 方正2
     #q_data = g_QuoteZMQ.quote_connect("51522")
