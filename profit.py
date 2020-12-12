@@ -345,8 +345,6 @@ class monitor_yield(object):
         self.buy_sell_var = {}
 
         self.bs_root_flag = False
-        self.hg_root_flag = False
-        self.hedge_ongoing_flag = False
         self.od_root_flag = False
         self.mp_root_flag = False
 
@@ -362,16 +360,23 @@ class monitor_yield(object):
         self.stop_update_max_profit = {}
 
         # hedge
-        self.hedge_data = {}
-        self.hedge_change_list = {StockType.etf50: [StockType.etf50, StockType.h300, StockType.s300, StockType.gz300], StockType.h300: [StockType.h300, StockType.s300, StockType.gz300], StockType.s300: [StockType.s300, StockType.h300, StockType.gz300], StockType.gz300: [StockType.gz300]}
-        self.order_for_hedge = {}
-        self.hedge_p_update_list = []
-        self.hedge_flag_1: bool = True
+        self.hg_index = 0
+        self.hg_root = {}
+        self.hg_boxlist = {}
+        self.hg_ongoing = {}
+        self.hg_state = {}
+        self.hg_p_update_list = {}
+        self.hg_p_update_flag = {}
+
+        self.hg_data = {}
+        self.hg_change_list = {StockType.etf50: [StockType.etf50, StockType.h300, StockType.s300, StockType.gz300], StockType.h300: [StockType.h300, StockType.s300, StockType.gz300], StockType.s300: [StockType.s300, StockType.h300, StockType.gz300], StockType.gz300: [StockType.gz300]}
+        self.order_for_hg = {}
         # futures / options used for hedging
-        self.Ft_for_which = {}
-        self.Opt_for_which = {}
-        # 对冲补单
-        self.hedge_addin_orderid = []
+        self.Ft_for_hg = {}
+        self.Opt_for_hg = {}
+
+        # 补单
+        self.addin_orderid = []
 
         # 记录
         self.order_data_txt = open(f'./log/order data {localtime.tm_year}-{localtime.tm_mon}-{localtime.tm_mday}.txt', 'a')
@@ -482,7 +487,7 @@ class monitor_yield(object):
             if values[2] == 0: ### 持仓为零的不录入
                 continue
 
-            if values[0] not in self.label_var.keys():
+            if values[0] not in list(self.label_var.keys()):
                 self.label_var[values[0]] = {}
                 for init in [self.strategy2totalprofit, self.strategy2totaldelta, self.strategy2totalgamma, self.strategy2totalvega, self.strategy2totaltheta, self.max_total_profit]:
                     init[values[0]] = StringVar(self.p_root)
@@ -496,7 +501,7 @@ class monitor_yield(object):
                 else:
                     self.label_var[values[0]][values[1]][name].set('{:g}'.format(0))
 
-        # read Ft_for_which
+        # read Ft_for_hg
         t = 1
         for i in range(nrows):
             row = table.row_values(i, start_colx=0, end_colx=None)
@@ -507,14 +512,14 @@ class monitor_yield(object):
                 continue
             if not int(row[5]) == 0:
                 key = (row[1], str_to_type[row[2]], str_to_type[row[3]])
-                if key not in self.Ft_for_which.keys():
-                    self.Ft_for_which[key] = {}
+                if key not in list(self.Ft_for_hg.keys()):
+                    self.Ft_for_hg[key] = {}
                 used_mat = str_to_type[row[4]]
-                if used_mat not in self.Ft_for_which[key].keys():
-                    self.Ft_for_which[key][used_mat] = 0
-                self.Ft_for_which[key][used_mat] += int(row[5])
+                if used_mat not in list(self.Ft_for_hg[key].keys()):
+                    self.Ft_for_hg[key][used_mat] = 0
+                self.Ft_for_hg[key][used_mat] += int(row[5])
 
-        # read Opt_for_which
+        # read Opt_for_hg
         t = 1
         for i in range(nrows):
             row = table.row_values(i, start_colx=0, end_colx=None)
@@ -525,15 +530,15 @@ class monitor_yield(object):
                 continue
             if not int(row[8]) == 0:
                 key = (row[1], str_to_type[row[2]], str_to_type[row[3]])
-                if key not in self.Opt_for_which.keys():
-                    self.Opt_for_which[key] = {}
+                if key not in list(self.Opt_for_hg.keys()):
+                    self.Opt_for_hg[key] = {}
                 used_sty = str_to_type[row[4]]
                 used_mat = str_to_type[row[5]]
                 used_call = row[6]
                 used_put = row[7]
-                if (used_sty, used_mat, (used_call, used_put)) not in self.Opt_for_which[key].keys():
-                    self.Opt_for_which[key][(used_sty, used_mat, (used_call, used_put))] = 0
-                self.Opt_for_which[key][(used_sty, used_mat, (used_call, used_put))] += int(row[8])
+                if (used_sty, used_mat, (used_call, used_put)) not in list(self.Opt_for_hg[key].keys()):
+                    self.Opt_for_hg[key][(used_sty, used_mat, (used_call, used_put))] = 0
+                self.Opt_for_hg[key][(used_sty, used_mat, (used_call, used_put))] += int(row[8])
 
         self.p_refresh()
         self.load_file_signal = False
@@ -579,30 +584,30 @@ class monitor_yield(object):
                 insert_row(row_counter, row_vals)
                 row_counter += 1
 
-        # record Ft_for_which
-        for i in list(self.Ft_for_which.keys()):
+        # record Ft_for_hg
+        for i in list(self.Ft_for_hg.keys()):
             strategy = i[0]
             sty = type_to_str[i[1]]
             mat = type_to_str[i[2]]
-            for j in list(self.Ft_for_which[i].keys()):
+            for j in list(self.Ft_for_hg[i].keys()):
                 used_mat = type_to_str[j]
-                if not self.Ft_for_which[i][j] == 0:
-                    row_vals = ['HEDGE_F', strategy, sty, mat, used_mat, self.Ft_for_which[i][j]]
+                if not self.Ft_for_hg[i][j] == 0:
+                    row_vals = ['HEDGE_F', strategy, sty, mat, used_mat, self.Ft_for_hg[i][j]]
                     insert_row(row_counter, row_vals)
                     row_counter += 1
 
-        # record Opt_for_which
-        for i in list(self.Opt_for_which.keys()):
+        # record Opt_for_hg
+        for i in list(self.Opt_for_hg.keys()):
             strategy = i[0]
             sty = type_to_str[i[1]]
             mat = type_to_str[i[2]]
-            for j in list(self.Opt_for_which[i].keys()):
+            for j in list(self.Opt_for_hg[i].keys()):
                 used_sty = type_to_str[j[0]]
                 used_mat = type_to_str[j[1]]
                 used_call = j[2][0]
                 used_put = j[2][1]
-                if not self.Opt_for_which[i][j] == 0:
-                    row_vals = ['HEDGE_O', strategy, sty, mat, used_sty, used_mat, used_call, used_put, self.Opt_for_which[i][j]]
+                if not self.Opt_for_hg[i][j] == 0:
+                    row_vals = ['HEDGE_O', strategy, sty, mat, used_sty, used_mat, used_call, used_put, self.Opt_for_hg[i][j]]
                     insert_row(row_counter, row_vals)
                     row_counter += 1
 
@@ -675,7 +680,7 @@ class monitor_yield(object):
                 for p, strategy in enumerate(list(self.label_var.keys())):
 
                     color = self.colors[p]
-                    self.strategy_contain_contract_num[strategy] = len(list(self.label_var[strategy].keys()))
+                    self.strategy_contain_contract_num[strategy] = len(self.label_var[strategy])
                     
 
                     # 盈利界面合约显示顺序
@@ -801,16 +806,15 @@ class monitor_yield(object):
                     self.add_new_signal.append(1)
 
             # greeks已更新flag
-            hedge_strategy = None
-            if self.hg_root_flag:
-                hedge_strategy = self.hg_boxlist[0][0].get()
+            for index in list(self.hg_root.keys()):
+                hedge_strategy = self.hg_boxlist[index][0][0].get()
 
-            if hedge_strategy not in list(self.order_for_hedge.keys()):
-                if contract in self.hedge_p_update_list:
-                    self.hedge_p_update_list.remove(contract)
+                if hedge_strategy not in list(self.order_for_hg.keys()):
+                    if contract in self.hg_p_update_list[index]:
+                        self.hg_p_update_list[index].remove(contract)
            
             for strategy in list(self.label_var.keys()):
-                if contract not in self.label_var[strategy].keys():
+                if contract not in list(self.label_var[strategy].keys()):
                     continue
 
                 # 录昨收
@@ -858,7 +862,7 @@ class monitor_yield(object):
                                                                         int(middle_price_profit)))
 
 
-                if strategy in self.stop_update_max_profit.keys() and time.time() - self.stop_update_max_profit[strategy] > 5:
+                if strategy in list(self.stop_update_max_profit.keys()) and time.time() - self.stop_update_max_profit[strategy] > 5:
                     self.stop_update_max_profit.pop(strategy)
 
                 if trade_period and not ((localtime.tm_hour == 9 and localtime.tm_min == 30) or (localtime.tm_hour == 11 and localtime.tm_min == 29) or (localtime.tm_hour == 13 and localtime.tm_min == 0)) and (middle_price_profit > float(self.max_total_profit[strategy].get())) and (BidPrice1 != AskPrice1 or sty == StockType.gz300) and not quote["TradingPrice"] == '' and strategy not in self.stop_update_max_profit.keys():
@@ -897,22 +901,22 @@ class monitor_yield(object):
                 for i, comb in enumerate([('delta$(万)', self.strategy2totaldelta[strategy]), ('gamma$(万)', self.strategy2totalgamma[strategy]), ('vega$', self.strategy2totalvega[strategy]), ('theta$', self.strategy2totaltheta[strategy])]):
 
                     greeks = {}
-                    for ty in ty_position.keys():
+                    for ty in list(ty_position.keys()):
                         greeks[ty] = {}
                         for mat_ in data_opt[ty].matlist:
                             greeks[ty][mat_] = 0
                             ty_mat_position[ty][mat_] = False
 
                     for val in list(self.label_var[strategy].keys()):
-                        for ty in greeks.keys():
+                        for ty in list(greeks.keys()):
                             if ty_contract_element[ty] in val:
                                 ty_position[ty] = True
-                                for mat_ in greeks[ty].keys():
+                                for mat_ in list(greeks[ty].keys()):
                                     if Mat['contract_format'][ty][mat_] in val:
                                         greeks[ty][mat_] += float(self.label_var[strategy][val][comb[0]].get())
                                         ty_mat_position[ty][mat_] = True
 
-                    overall = sum(sum(greeks[ty].values()) for ty in ty_position.keys())
+                    overall = sum(sum(greeks[ty].values()) for ty in list(ty_position.keys()))
 
                     if len([0 for _ in ty_position.values() if _ == True]) > 1:
                         if i < 2:
@@ -920,45 +924,46 @@ class monitor_yield(object):
                         else:
                             _str = '{:.0f}'.format(overall)
 
-                        for ty in ty_position.keys():
+                        for ty in list(ty_position.keys()):
                             if ty_position[ty]:
                                 mat_num = len([0 for _ in ty_mat_position[ty].values() if _ == True])
                                 if i < 2:
                                     _str += '\n' + str(ty_name[ty]) + ': ' + '{:.1f}'.format(sum(greeks[ty].values()))
                                     if mat_num > 1:
-                                        _str += '\n' + '\n'.join([Mat['contract_format'][ty][mat_] + ': ' + '{:.1f}'.format(greeks[ty][mat_]) for mat_ in greeks[ty].keys() if ty_mat_position[ty][mat_]])
+                                        _str += '\n' + '\n'.join([Mat['contract_format'][ty][mat_] + ': ' + '{:.1f}'.format(greeks[ty][mat_]) for mat_ in list(greeks[ty].keys()) if ty_mat_position[ty][mat_]])
                                 else:
                                     _str += '\n' + str(ty_name[ty]) + ': ' + '{:.0f}'.format(sum(greeks[ty].values()))
                                     if mat_num > 1:
-                                        _str += '\n' + '\n'.join([Mat['contract_format'][ty][mat_] + ': ' + '{:.0f}'.format(greeks[ty][mat_]) for mat_ in greeks[ty].keys() if ty_mat_position[ty][mat_]])
+                                        _str += '\n' + '\n'.join([Mat['contract_format'][ty][mat_] + ': ' + '{:.0f}'.format(greeks[ty][mat_]) for mat_ in list(greeks[ty].keys()) if ty_mat_position[ty][mat_]])
                         comb[1].set(_str)
                     else:
-                        for ty in ty_position.keys():
+                        for ty in list(ty_position.keys()):
                             if ty_position[ty]:
                                 mat_num = len([0 for _ in ty_mat_position[ty].values() if _ == True])
                                 if i < 2:
                                     _str = '{:.1f}'.format(overall)
                                     if mat_num > 1:
-                                        _str += '\n' + '\n'.join([Mat['contract_format'][ty][mat_] + ': ' + '{:.1f}'.format(greeks[ty][mat_]) for mat_ in greeks[ty].keys() if ty_mat_position[ty][mat_]])
+                                        _str += '\n' + '\n'.join([Mat['contract_format'][ty][mat_] + ': ' + '{:.1f}'.format(greeks[ty][mat_]) for mat_ in list(greeks[ty].keys()) if ty_mat_position[ty][mat_]])
                                 else:
                                     _str = '{:.0f}'.format(overall)
                                     if mat_num > 1:
-                                        _str += '\n' + '\n'.join([Mat['contract_format'][ty][mat_] + ': ' + '{:.0f}'.format(greeks[ty][mat_]) for mat_ in greeks[ty].keys() if ty_mat_position[ty][mat_]])
+                                        _str += '\n' + '\n'.join([Mat['contract_format'][ty][mat_] + ': ' + '{:.0f}'.format(greeks[ty][mat_]) for mat_ in list(greeks[ty].keys()) if ty_mat_position[ty][mat_]])
                                 comb[1].set(_str)
 
 
                     # hedge data
-                    if strategy not in self.hedge_data.keys():
-                        self.hedge_data[strategy] = {}
-                        self.hedge_data[strategy]['position'] = {}
-                    self.hedge_data[strategy][comb[0]] = greeks
-                    self.hedge_data[strategy]['position']['type'] = ty_position
-                    self.hedge_data[strategy]['position']['mat'] = ty_mat_position
+                    if strategy not in list(self.hg_data.keys()):
+                        self.hg_data[strategy] = {}
+                        self.hg_data[strategy]['position'] = {}
+                    self.hg_data[strategy][comb[0]] = greeks
+                    self.hg_data[strategy]['position']['type'] = ty_position
+                    self.hg_data[strategy]['position']['mat'] = ty_mat_position
 
             # greeks已更新flag
-            self.hedge_flag_1 = False
-            if self.hedge_p_update_list == []:
-                self.hedge_flag_1 = True
+            for index in list(self.hg_root.keys()):
+                self.hg_p_update_flag[index] = False
+                if self.hg_p_update_list[index] == []:
+                    self.hg_p_update_flag[index] = True
 
         except:
             pass
@@ -988,7 +993,7 @@ class monitor_yield(object):
         root.title('成交回报')
         self.main_root_position = self.main_root.winfo_geometry()
         index = [i for i, x in enumerate(self.main_root_position) if x == '+']
-        root.geometry("%dx%d+%d+%d" % (700, 500, int(self.main_root_position[index[0] + 1 : index[1]]) + 1100, int(self.main_root_position[index[1] + 1 :]) + 400))
+        root.geometry("%dx%d+%d+%d" % (750, 500, int(self.main_root_position[index[0] + 1 : index[1]]) + 1100, int(self.main_root_position[index[1] + 1 :]) + 400))
         canvas = Canvas(root, borderwidth=0)
         frame = Frame(canvas)
         self.bs_root = frame
@@ -1028,7 +1033,7 @@ class monitor_yield(object):
                 self.bs_refresh_signal.pop(i)
 
 
-            for k in self.bs_boxlist.keys():
+            for k in list(self.bs_boxlist.keys()):
                 for box in self.bs_boxlist[k]:
                     try:
                         box.grid_forget()
@@ -1139,6 +1144,7 @@ class monitor_yield(object):
         TradeTime = '{}:{}:{}'.format(int(utc[0]) + 8, utc[1:3], utc[3:6])
         ExecType = quote['ExecType']
         strategy = quote['UserKey1']
+        source = quote['UserKey2']
         OriginalQty = quote['OriginalQty']
         OrderQty = quote['OrderQty']
 
@@ -1155,7 +1161,7 @@ class monitor_yield(object):
             self.order_data_txt.write(time.strftime('%H:%M:%S', localtime) + ' | ' + '(内) ' + str(quote) + '\n')
 
         if ExecType in ['3','6'] and not Price == 0.0:
-            if id not in self.strategy_trade_return.keys():
+            if id not in list(self.strategy_trade_return.keys()):
                 if cumqty != 0:
                     Volume = cumqty
                     flag = True
@@ -1170,7 +1176,7 @@ class monitor_yield(object):
         # 内部下单
         if not outer:
             if ExecType == '5' and id not in self.strategy_trade_return['type5']:
-                if id not in self.strategy_trade_return.keys():
+                if id not in list(self.strategy_trade_return.keys()):
                     Volume = int(OrderQty)
                 else:
                     Volume = int(OrderQty) - (int(OriginalQty) - self.strategy_trade_return[id])
@@ -1216,8 +1222,8 @@ class monitor_yield(object):
                 in_type = t[0][Direction]
 
 
-                if strategy not in self.label_var.keys() or \
-                        contract not in self.label_var[strategy].keys():
+                if strategy not in list(self.label_var.keys()) or \
+                        contract not in list(self.label_var[strategy].keys()):
                     self.add(strategy,contract)
 
                 volume = int(self.label_var[strategy][contract]['持仓数'].get())
@@ -1245,50 +1251,45 @@ class monitor_yield(object):
 
 
                 # 判断 自对冲下单 是否完成
-                if strategy in self.order_for_hedge.keys():
-                    if contract in self.order_for_hedge[strategy].keys() and OriginalQty == OrderQty and leavesqty == 0:
-                        self.order_for_hedge[strategy].pop(contract)
-                    if self.order_for_hedge[strategy] == {}:
-                        self.order_for_hedge.pop(strategy)
+                if source == 'hedge':
+                    if strategy in list(self.order_for_hg.keys()):
+                        if contract in list(self.order_for_hg[strategy].keys()) and OriginalQty == OrderQty and leavesqty == 0:
+                            self.order_for_hg[strategy].pop(contract)
+                        if self.order_for_hg[strategy] == {}:
+                            self.order_for_hg.pop(strategy)
 
             self.bs_refresh_signal.append(1)
             break
 
 
         # 补单
-        if not outer and ExecType in ['5', '8', '10'] and not id in self.hedge_addin_orderid:
+        if not outer and ExecType in ['5', '8', '9'] and not id in self.addin_orderid:
             self.order_data_txt.write(time.strftime('%H:%M:%S', localtime) + ' | ' + '(需要补单的成交回报) ' + str(quote) + '\n')
 
             num_add = int(OriginalQty) - int(OrderQty)
-
-            if Direction == 1:
-                mp = 1
-                price = 'ASK+1T'
-            else:
-                mp = -1
-                price = 'BID-1T'
-
+            mp = 1 if Direction == 1 else -1
             num_add *= mp
 
-            if strategy in self.order_for_hedge.keys():
-                if contract in self.order_for_hedge[strategy].keys():
-                    self.order_for_hedge[strategy][contract] = num_add
+            if source == 'hedge':
+                if strategy in list(self.order_for_hg.keys()):
+                    if contract in list(self.order_for_hg[strategy].keys()):
+                        self.order_for_hg[strategy][contract] = num_add
 
-            self.hedge_addin_orderid.append(id)
+            self.addin_orderid.append(id)
 
-            self.order_api(contract, price, num_add, strategy)
+            self.order_api(contract, 'HIT', num_add, strategy, source)
 
         self.order_data_txt.flush()
 
 
     def all_select(self):
-        for k in self.checkbutton_context_list.keys():
+        for k in list(self.checkbutton_context_list.keys()):
             if not self.checkbutton_context_list[k][1] == None: # 内外部下单
                 self.checkbutton_context_list[k][1].select()
 
 
     def de_all_select(self):
-        for k in self.checkbutton_context_list.keys():
+        for k in list(self.checkbutton_context_list.keys()):
             if not self.checkbutton_context_list[k][1] == None: #内外部下单
                 self.checkbutton_context_list[k][1].deselect()
 
@@ -1301,7 +1302,7 @@ class monitor_yield(object):
         if '' in [str_sty, str_mat]:
             return
 
-        for k in self.checkbutton_context_list.keys():
+        for k in list(self.checkbutton_context_list.keys()):
             if not self.checkbutton_context_list[k][1] == None: # 内外部下单
                 contract = self.bs_boxlist[k][4].cget('text')
                 if str_sty in contract and str_mat in contract:
@@ -1355,8 +1356,8 @@ class monitor_yield(object):
             bs_type = self.buy_sell_var[k1]['成交类型']
 
 
-            if strategy not in self.label_var.keys() or \
-                    contract not in self.label_var[strategy].keys():
+            if strategy not in list(self.label_var.keys()) or \
+                    contract not in list(self.label_var[strategy].keys()):
                 self.add(strategy,contract)
 
             volume = int(self.label_var[strategy][contract]['持仓数'].get())
@@ -1386,10 +1387,10 @@ class monitor_yield(object):
         for k in ks:
             self.buy_sell_var.pop(k)
             self.checkbutton_context_list.pop(k-1)
-        nums = [i+1 for i in range(len(self.buy_sell_var.keys()))]
+        nums = [i+1 for i in range(len(self.buy_sell_var))]
         temp = {}
         temp_c = {}
-        for i,k in zip(nums,self.buy_sell_var.keys()):
+        for i,k in zip(nums, self.buy_sell_var.keys()):
             temp[i]=self.buy_sell_var[k]
             temp_c[i - 1] = self.checkbutton_context_list[k - 1]
         self.buy_sell_var = temp
@@ -1404,13 +1405,13 @@ class monitor_yield(object):
         init_data = ['0' for _ in names]
         init_data[0], init_data[1] = strategy, contract
 
-        if strategy not in self.label_var.keys():
+        if strategy not in list(self.label_var.keys()):
             self.label_var[strategy] = {}
             for init in [self.strategy2totalprofit, self.strategy2totaldelta, self.strategy2totalgamma, self.strategy2totalvega, self.strategy2totaltheta, self.max_total_profit]:
                 init[strategy] = StringVar(self.p_root)
                 init[strategy].set('-inf')
 
-        if contract not in self.label_var[strategy].keys():
+        if contract not in list(self.label_var[strategy].keys()):
             self.label_var[strategy][contract] = {}
             for j, name in enumerate(names):
                 self.label_var[strategy][contract][name] = StringVar(self.p_root)
@@ -1420,7 +1421,7 @@ class monitor_yield(object):
 
 
     ##############################################################################################################
-    def order_api(self, target: str, price: str, num: int, strategy: str):
+    def order_api(self, target: str, price: str, num: int, strategy: str, source: str):
         # 查询持仓
         accountInfo = g_TradeZMQ.account_lookup(g_TradeSession)
         if accountInfo != None:
@@ -1433,37 +1434,37 @@ class monitor_yield(object):
         if num == 0:
             return
 
-        if num > 0:
-            side = '1'
-        elif num < 0:
-            side = '2'
+        side = '1' if num > 0 else '2'
+        if price == 'HIT':
+            Price = 'ASK+0' if side == '1' else 'BID+0'
+        else:
+            return
 
         Param = {
 
         'BrokerID':arrInfo[0]['BrokerID'],
         'Account':arrInfo[0]['Account'],
         'Symbol':target,
-        'Price':price,
         'Side':side,
+        'Price':Price,
         'TimeInForce':'2',# 'IOC | FAK'
-        'OrderType':'2',# 'LIMIT'
+        'OrderType':'2',
         'OrderQty':str(abs(num)),
         'PositionEffect':'4',
         'UserKey1': strategy,
+        'UserKey2': source,
 
         }
-        g_TradeZMQ.new_order(g_TradeSession,Param)
+        print(g_TradeZMQ.new_order(g_TradeSession,Param))
 
 
     def open_hedge_ui(self):
-
-        if self.hg_root_flag:
-            return
         self.init_hedge_ui()
 
 
     def init_hedge_ui(self):
-        self.hg_boxlist = {0:[]}
+
+        self.hg_index += 1
 
         strategies = list(self.label_var.keys())
         if strategies == []:
@@ -1473,11 +1474,14 @@ class monitor_yield(object):
         root.title('对冲')
         self.main_root_position = self.main_root.winfo_geometry()
         index = [i for i, x in enumerate(self.main_root_position) if x == '+']
-        root.geometry("%dx%d+%d+%d" % (700, 300, int(self.main_root_position[index[0] + 1 : index[1]]), int(self.main_root_position[index[1] + 1 :]) + 100))
+        root.geometry("%dx%d+%d+%d" % (750, 300, int(self.main_root_position[index[0] + 1 : index[1]]), int(self.main_root_position[index[1] + 1 :]) + 100))
         canvas = Canvas(root, borderwidth=0)
         frame = Frame(canvas)
-        self.hg_root = frame
-        self.hg_root_flag = True
+        hedge_index = self.hg_index
+        self.hg_root[hedge_index] = frame
+        self.hg_boxlist[hedge_index] = {0:[]}
+        self.hg_p_update_flag[hedge_index] = True
+        self.hg_p_update_list[hedge_index] = []
         vsb = Scrollbar(root, orient="vertical", command=canvas.yview)
         canvas.configure(yscrollcommand=vsb.set)
 
@@ -1492,220 +1496,268 @@ class monitor_yield(object):
         frame.bind("<Configure>", lambda event, canvas=canvas: onFrameConfigure(canvas))
 
 
-        lb_stg = ttk.Label(self.hg_root, text = '策略')
+        lb_stg = ttk.Label(self.hg_root[hedge_index], text = '策略')
         lb_stg.grid(row=1, column=1)
         stg = StringVar()
-        stgChosen = ttk.Combobox(self.hg_root, width=10, textvariable=stg)
+        stgChosen = ttk.Combobox(self.hg_root[hedge_index], width=10, textvariable=stg)
         stgChosen['values'] = strategies
         stgChosen.grid(column=1, row=2, padx=5)
         stgChosen.current(0)
-        self.hg_boxlist[0].append(stgChosen)
+        self.hg_boxlist[hedge_index][0].append(stgChosen)
 
-        lb_grk = ttk.Label(self.hg_root, text = 'Greeks')
+        lb_grk = ttk.Label(self.hg_root[hedge_index], text = 'Greeks')
         lb_grk.grid(row=1, column=2)
         grk = StringVar()
-        grkChosen = ttk.Combobox(self.hg_root, width=10, textvariable=grk)
+        grkChosen = ttk.Combobox(self.hg_root[hedge_index], width=10, textvariable=grk)
         grkChosen['values'] = ['delta$(万)']
         grkChosen.grid(column=2, row=2, padx=5)
         grkChosen.current(0)
-        self.hg_boxlist[0].append(grkChosen)
+        self.hg_boxlist[hedge_index][0].append(grkChosen)
 
-        lb_thred = ttk.Label(self.hg_root, text = '阈值（万）')
+        lb_thred = ttk.Label(self.hg_root[hedge_index], text = '阈值（万）')
         lb_thred.grid(row=1, column=3)
         thred = StringVar()
-        thredEntry = ttk.Entry(self.hg_root, width=10, textvariable=thred)
+        thredEntry = ttk.Entry(self.hg_root[hedge_index], width=10, textvariable=thred)
         thredEntry.grid(column=3, row=2, padx=5)
-        self.hg_boxlist[0].append(thredEntry)
+        self.hg_boxlist[hedge_index][0].append(thredEntry)
 
-        lb_way = ttk.Label(self.hg_root, text = '方式')
+        lb_way = ttk.Label(self.hg_root[hedge_index], text = '方式')
         lb_way.grid(row=1, column=4)
         way = StringVar()
-        wayChosen = ttk.Combobox(self.hg_root, width=10, textvariable=way)
+        wayChosen = ttk.Combobox(self.hg_root[hedge_index], width=10, textvariable=way)
         wayChosen['values'] = ['合成', '先期货后合成']
         wayChosen.grid(column=4, row=2, padx=5)
         wayChosen.current(0)
-        self.hg_boxlist[0].append(wayChosen)
+        self.hg_boxlist[hedge_index][0].append(wayChosen)
 
 
-        self.hedge_state = StringVar()
-        self.hedge_state.set('对冲')
-        b = Button(self.hg_root, textvariable=self.hedge_state, command=self.hedge_thread, width=10)
+        self.hg_state[hedge_index] = StringVar()
+        self.hg_state[hedge_index].set('对冲')
+        b = Button(self.hg_root[hedge_index], textvariable=self.hg_state[hedge_index], command=lambda:self.hedge_thread(hedge_index), width=10)
         b.grid(row=2, column=5, sticky=E, padx=5, pady=10)
 
-        b = Button(self.hg_root, text="停止对冲", command=self.stop_hedge, width=10)
+        b = Button(self.hg_root[hedge_index], text="停止对冲", command=lambda:self.stop_hedge(hedge_index), width=10)
         b.grid(row=2, column=6, sticky=E, padx=5, pady=10)
 
 
         # 手动板
-        l = ttk.Label(self.hg_root, text = '手动模式')
+        l = ttk.Label(self.hg_root[hedge_index], text = '手动模式')
         l.grid(row=1, column=7, sticky=E, padx=10)
-        self.hg_boxlist['mm'] = IntVar(self.hg_root)
-        l = Checkbutton(self.hg_root,variable=self.hg_boxlist['mm'])
+        self.hg_boxlist[hedge_index]['mm'] = IntVar(self.hg_root[hedge_index])
+        l = Checkbutton(self.hg_root[hedge_index],variable=self.hg_boxlist[hedge_index]['mm'])
         l.grid(row=2, column=7, sticky=E + W, padx=10)
 
-        l = ttk.Label(self.hg_root, text = 'M1')
+        l = ttk.Label(self.hg_root[hedge_index], text = '绝对中性')
+        l.grid(row=1, column=8, sticky=E, padx=10)
+        self.hg_boxlist[hedge_index]['an'] = IntVar(self.hg_root[hedge_index])
+        l = Checkbutton(self.hg_root[hedge_index],variable=self.hg_boxlist[hedge_index]['an'])
+        l.grid(row=2, column=8, sticky=E + W, padx=10)
+
+        l = ttk.Label(self.hg_root[hedge_index], text = 'M1')
         l.grid(row=3, column=2)
-        l = ttk.Label(self.hg_root, text = 'M2')
+        l = ttk.Label(self.hg_root[hedge_index], text = 'M2')
         l.grid(row=3, column=3)
-        l = ttk.Label(self.hg_root, text = 'M3')
+        l = ttk.Label(self.hg_root[hedge_index], text = 'M3')
         l.grid(row=3, column=4)
-        l = ttk.Label(self.hg_root, text = 'Q1')
+        l = ttk.Label(self.hg_root[hedge_index], text = 'Q1')
         l.grid(row=3, column=5)
-        l = ttk.Label(self.hg_root, text = 'Q2')
+        l = ttk.Label(self.hg_root[hedge_index], text = 'Q2')
         l.grid(row=3, column=6)
-        l = ttk.Label(self.hg_root, text = 'Q3')
+        l = ttk.Label(self.hg_root[hedge_index], text = 'Q3')
         l.grid(row=3, column=7)
 
-        l = ttk.Label(self.hg_root, text = 'IF')
+        l = ttk.Label(self.hg_root[hedge_index], text = 'IF')
         l.grid(row=4, column=1)
-        l = ttk.Label(self.hg_root, text = 'IH')
+        l = ttk.Label(self.hg_root[hedge_index], text = 'IH')
         l.grid(row=5, column=1)
-        l = ttk.Label(self.hg_root, text = '50E')
+        l = ttk.Label(self.hg_root[hedge_index], text = '50E')
         l.grid(row=6, column=1)
-        l = ttk.Label(self.hg_root, text = '沪E')
+        l = ttk.Label(self.hg_root[hedge_index], text = '沪E')
         l.grid(row=7, column=1)
-        l = ttk.Label(self.hg_root, text = '深E')
+        l = ttk.Label(self.hg_root[hedge_index], text = '深E')
         l.grid(row=8, column=1)
-        l = ttk.Label(self.hg_root, text = '股指')
+        l = ttk.Label(self.hg_root[hedge_index], text = '股指')
         l.grid(row=9, column=1)
 
-        self.hg_boxlist[FutureType.IF] = IntVar(self.hg_root)
-        l = Radiobutton(self.hg_root,variable=self.hg_boxlist[FutureType.IF],value=1)
+        self.hg_boxlist[hedge_index][FutureType.IF] = IntVar(self.hg_root[hedge_index])
+        l = Radiobutton(self.hg_root[hedge_index],variable=self.hg_boxlist[hedge_index][FutureType.IF],value=1)
         l.grid(row=4, column=2, sticky=E + W, padx=10)
-        l = Radiobutton(self.hg_root,variable=self.hg_boxlist[FutureType.IF],value=2)
+        l = Radiobutton(self.hg_root[hedge_index],variable=self.hg_boxlist[hedge_index][FutureType.IF],value=2)
         l.grid(row=4, column=3, sticky=E + W, padx=10)
-        l = Radiobutton(self.hg_root,variable=self.hg_boxlist[FutureType.IF],value=4)
+        l = Radiobutton(self.hg_root[hedge_index],variable=self.hg_boxlist[hedge_index][FutureType.IF],value=4)
         l.grid(row=4, column=5, sticky=E + W, padx=10)
-        l = Radiobutton(self.hg_root,variable=self.hg_boxlist[FutureType.IF],value=5)
+        l = Radiobutton(self.hg_root[hedge_index],variable=self.hg_boxlist[hedge_index][FutureType.IF],value=5)
         l.grid(row=4, column=6, sticky=E + W, padx=10)
 
-        self.hg_boxlist[FutureType.IH] = IntVar(self.hg_root)
-        l = Radiobutton(self.hg_root,variable=self.hg_boxlist[FutureType.IH],value=1)
+        self.hg_boxlist[hedge_index][FutureType.IH] = IntVar(self.hg_root[hedge_index])
+        l = Radiobutton(self.hg_root[hedge_index],variable=self.hg_boxlist[hedge_index][FutureType.IH],value=1)
         l.grid(row=5, column=2, sticky=E + W, padx=10)
-        l = Radiobutton(self.hg_root,variable=self.hg_boxlist[FutureType.IH],value=2)
+        l = Radiobutton(self.hg_root[hedge_index],variable=self.hg_boxlist[hedge_index][FutureType.IH],value=2)
         l.grid(row=5, column=3, sticky=E + W, padx=10)
-        l = Radiobutton(self.hg_root,variable=self.hg_boxlist[FutureType.IH],value=4)
+        l = Radiobutton(self.hg_root[hedge_index],variable=self.hg_boxlist[hedge_index][FutureType.IH],value=4)
         l.grid(row=5, column=5, sticky=E + W, padx=10)
-        l = Radiobutton(self.hg_root,variable=self.hg_boxlist[FutureType.IH],value=5)
+        l = Radiobutton(self.hg_root[hedge_index],variable=self.hg_boxlist[hedge_index][FutureType.IH],value=5)
         l.grid(row=5, column=6, sticky=E + W, padx=10)
 
-        self.hg_boxlist[StockType.etf50] = {Maturity.M1: IntVar(self.hg_root), Maturity.M2: IntVar(self.hg_root), Maturity.Q1: IntVar(self.hg_root), Maturity.Q2: IntVar(self.hg_root)}
-        l = Checkbutton(self.hg_root,variable=self.hg_boxlist[StockType.etf50][Maturity.M1])
+        self.hg_boxlist[hedge_index][StockType.etf50] = {Maturity.M1: IntVar(self.hg_root[hedge_index]), Maturity.M2: IntVar(self.hg_root[hedge_index]), Maturity.Q1: IntVar(self.hg_root[hedge_index]), Maturity.Q2: IntVar(self.hg_root[hedge_index])}
+        l = Checkbutton(self.hg_root[hedge_index],variable=self.hg_boxlist[hedge_index][StockType.etf50][Maturity.M1])
         l.grid(row=6, column=2, sticky=E + W, padx=10)
-        l = Checkbutton(self.hg_root,variable=self.hg_boxlist[StockType.etf50][Maturity.M2])
+        l = Checkbutton(self.hg_root[hedge_index],variable=self.hg_boxlist[hedge_index][StockType.etf50][Maturity.M2])
         l.grid(row=6, column=3, sticky=E + W, padx=10)
-        l = Checkbutton(self.hg_root,variable=self.hg_boxlist[StockType.etf50][Maturity.Q1])
+        l = Checkbutton(self.hg_root[hedge_index],variable=self.hg_boxlist[hedge_index][StockType.etf50][Maturity.Q1])
         l.grid(row=6, column=5, sticky=E + W, padx=10)
-        l = Checkbutton(self.hg_root,variable=self.hg_boxlist[StockType.etf50][Maturity.Q2])
+        l = Checkbutton(self.hg_root[hedge_index],variable=self.hg_boxlist[hedge_index][StockType.etf50][Maturity.Q2])
         l.grid(row=6, column=6, sticky=E + W, padx=10)
 
-        self.hg_boxlist[StockType.h300] = {Maturity.M1: IntVar(self.hg_root), Maturity.M2: IntVar(self.hg_root), Maturity.Q1: IntVar(self.hg_root), Maturity.Q2: IntVar(self.hg_root)}
-        l = Checkbutton(self.hg_root,variable=self.hg_boxlist[StockType.h300][Maturity.M1])
+        self.hg_boxlist[hedge_index][StockType.h300] = {Maturity.M1: IntVar(self.hg_root[hedge_index]), Maturity.M2: IntVar(self.hg_root[hedge_index]), Maturity.Q1: IntVar(self.hg_root[hedge_index]), Maturity.Q2: IntVar(self.hg_root[hedge_index])}
+        l = Checkbutton(self.hg_root[hedge_index],variable=self.hg_boxlist[hedge_index][StockType.h300][Maturity.M1])
         l.grid(row=7, column=2, sticky=E + W, padx=10)
-        l = Checkbutton(self.hg_root,variable=self.hg_boxlist[StockType.h300][Maturity.M2])
+        l = Checkbutton(self.hg_root[hedge_index],variable=self.hg_boxlist[hedge_index][StockType.h300][Maturity.M2])
         l.grid(row=7, column=3, sticky=E + W, padx=10)
-        l = Checkbutton(self.hg_root,variable=self.hg_boxlist[StockType.h300][Maturity.Q1])
+        l = Checkbutton(self.hg_root[hedge_index],variable=self.hg_boxlist[hedge_index][StockType.h300][Maturity.Q1])
         l.grid(row=7, column=5, sticky=E + W, padx=10)
-        l = Checkbutton(self.hg_root,variable=self.hg_boxlist[StockType.h300][Maturity.Q2])
+        l = Checkbutton(self.hg_root[hedge_index],variable=self.hg_boxlist[hedge_index][StockType.h300][Maturity.Q2])
         l.grid(row=7, column=6, sticky=E + W, padx=10)
 
-        self.hg_boxlist[StockType.s300] = {Maturity.M1: IntVar(self.hg_root), Maturity.M2: IntVar(self.hg_root), Maturity.Q1: IntVar(self.hg_root), Maturity.Q2: IntVar(self.hg_root)}
-        l = Checkbutton(self.hg_root,variable=self.hg_boxlist[StockType.s300][Maturity.M1])
+        self.hg_boxlist[hedge_index][StockType.s300] = {Maturity.M1: IntVar(self.hg_root[hedge_index]), Maturity.M2: IntVar(self.hg_root[hedge_index]), Maturity.Q1: IntVar(self.hg_root[hedge_index]), Maturity.Q2: IntVar(self.hg_root[hedge_index])}
+        l = Checkbutton(self.hg_root[hedge_index],variable=self.hg_boxlist[hedge_index][StockType.s300][Maturity.M1])
         l.grid(row=8, column=2, sticky=E + W, padx=10)
-        l = Checkbutton(self.hg_root,variable=self.hg_boxlist[StockType.s300][Maturity.M2])
+        l = Checkbutton(self.hg_root[hedge_index],variable=self.hg_boxlist[hedge_index][StockType.s300][Maturity.M2])
         l.grid(row=8, column=3, sticky=E + W, padx=10)
-        l = Checkbutton(self.hg_root,variable=self.hg_boxlist[StockType.s300][Maturity.Q1])
+        l = Checkbutton(self.hg_root[hedge_index],variable=self.hg_boxlist[hedge_index][StockType.s300][Maturity.Q1])
         l.grid(row=8, column=5, sticky=E + W, padx=10)
-        l = Checkbutton(self.hg_root,variable=self.hg_boxlist[StockType.s300][Maturity.Q2])
+        l = Checkbutton(self.hg_root[hedge_index],variable=self.hg_boxlist[hedge_index][StockType.s300][Maturity.Q2])
         l.grid(row=8, column=6, sticky=E + W, padx=10)
 
-        self.hg_boxlist[StockType.gz300] = {Maturity.M1: IntVar(self.hg_root), Maturity.M2: IntVar(self.hg_root), Maturity.M3: IntVar(self.hg_root), Maturity.Q1: IntVar(self.hg_root), Maturity.Q2: IntVar(self.hg_root), Maturity.Q3: IntVar(self.hg_root)}
-        l = Checkbutton(self.hg_root,variable=self.hg_boxlist[StockType.gz300][Maturity.M1])
+        self.hg_boxlist[hedge_index][StockType.gz300] = {Maturity.M1: IntVar(self.hg_root[hedge_index]), Maturity.M2: IntVar(self.hg_root[hedge_index]), Maturity.M3: IntVar(self.hg_root[hedge_index]), Maturity.Q1: IntVar(self.hg_root[hedge_index]), Maturity.Q2: IntVar(self.hg_root[hedge_index]), Maturity.Q3: IntVar(self.hg_root[hedge_index])}
+        l = Checkbutton(self.hg_root[hedge_index],variable=self.hg_boxlist[hedge_index][StockType.gz300][Maturity.M1])
         l.grid(row=9, column=2, sticky=E + W, padx=10)
-        l = Checkbutton(self.hg_root,variable=self.hg_boxlist[StockType.gz300][Maturity.M2])
+        l = Checkbutton(self.hg_root[hedge_index],variable=self.hg_boxlist[hedge_index][StockType.gz300][Maturity.M2])
         l.grid(row=9, column=3, sticky=E + W, padx=10)
-        l = Checkbutton(self.hg_root,variable=self.hg_boxlist[StockType.gz300][Maturity.M3])
+        l = Checkbutton(self.hg_root[hedge_index],variable=self.hg_boxlist[hedge_index][StockType.gz300][Maturity.M3])
         l.grid(row=9, column=4, sticky=E + W, padx=10)
-        l = Checkbutton(self.hg_root,variable=self.hg_boxlist[StockType.gz300][Maturity.Q1])
+        l = Checkbutton(self.hg_root[hedge_index],variable=self.hg_boxlist[hedge_index][StockType.gz300][Maturity.Q1])
         l.grid(row=9, column=5, sticky=E + W, padx=10)
-        l = Checkbutton(self.hg_root,variable=self.hg_boxlist[StockType.gz300][Maturity.Q2])
+        l = Checkbutton(self.hg_root[hedge_index],variable=self.hg_boxlist[hedge_index][StockType.gz300][Maturity.Q2])
         l.grid(row=9, column=6, sticky=E + W, padx=10)
-        l = Checkbutton(self.hg_root,variable=self.hg_boxlist[StockType.gz300][Maturity.Q3])
+        l = Checkbutton(self.hg_root[hedge_index],variable=self.hg_boxlist[hedge_index][StockType.gz300][Maturity.Q3])
         l.grid(row=9, column=7, sticky=E + W, padx=10)
 
         def callback():
-            self.stop_hedge()
+            self.stop_hedge(hedge_index)
             root.destroy()
-            self.hg_root_flag = False
+            self.hg_root.pop(hedge_index)
         root.protocol("WM_DELETE_WINDOW", callback)
         root.mainloop()
 
 
-    def hedge_thread(self):
-        
-        self.stop_hedge()
-        thread = threading.Thread(target = self.hedge, args=())
+    def hedge_thread(self, hedge_index: int):
+
+        self.stop_hedge(hedge_index)
+        thread = threading.Thread(target = self.hedge, args=(hedge_index, ))
         thread.setDaemon(True)
         thread.start()
 
 
-    def hedge(self):
+    def stop_hedge(self, hedge_index: int):
 
-        hedge_strategy = self.hg_boxlist[0][0].get()
-        hedge_greeks = self.hg_boxlist[0][1].get()
-        hedge_way = self.hg_boxlist[0][3].get()
+        if self.hg_state[hedge_index].get() == '对冲中......':
+            self.hg_root[hedge_index].after_cancel(self.hg_ongoing[hedge_index])
+            self.hg_state[hedge_index].set('对冲')
+
+
+    def hedge(self, hedge_index: int):
+
+        hedge_strategy = self.hg_boxlist[hedge_index][0][0].get()
+        hedge_greeks = self.hg_boxlist[hedge_index][0][1].get()
+        hedge_way = self.hg_boxlist[hedge_index][0][3].get()
         try:
-            hedge_thred = float(self.hg_boxlist[0][2].get())
+            hedge_thred = float(self.hg_boxlist[hedge_index][0][2].get())
         except:
             return
 
-        self.hedge_ongoing_flag = True
-        self.hedge_ongoing = self.hg_root.after(500, self.hedge)
+        self.hg_ongoing[hedge_index] = self.hg_root[hedge_index].after(500, self.hedge, hedge_index)
 
-        if self.hedge_state.get() == '对冲':
-            self.hedge_state.set('对冲中......')
+        if self.hg_state[hedge_index].get() == '对冲':
+            self.hg_state[hedge_index].set('对冲中......')
 
 
-        if not trade_period or (localtime.tm_hour == 11 and localtime.tm_min > 26) or (localtime.tm_hour == 13 and localtime.tm_min < 3):
+        if not trade_period or (localtime.tm_hour == 9 and localtime.tm_min < 33) or (localtime.tm_hour == 11 and localtime.tm_min > 26) or (localtime.tm_hour == 13 and localtime.tm_min < 3):
             return
 
-        if hedge_strategy in self.order_for_hedge.keys():
+        if hedge_strategy in list(self.order_for_hg.keys()):
             return
 
-        if abs(hedge_thred) > abs(sum([sum(self.hedge_data[hedge_strategy][hedge_greeks][sty].values()) for sty in self.hedge_data[hedge_strategy][hedge_greeks].keys()])):
+        total_greeks = sum([sum(self.hg_data[hedge_strategy][hedge_greeks][sty].values()) for sty in list(self.hg_data[hedge_strategy][hedge_greeks].keys())])
+        if abs(hedge_thred) > abs(total_greeks):
             return
 
-        if not self.hedge_flag_1:
+        if not self.hg_p_update_flag[hedge_index]:
             return
 
 
-        self.hedge_data_txt.write(time.strftime('%H:%M:%S', localtime) + ' | ' + '对冲判断前......' + '\n' + 'order for hedge：' + str(self.order_for_hedge) + '\n' + 'Ft for which：' + str(self.Ft_for_which) + '\n' + 'Opt for which：' + str(self.Opt_for_which) + '\n')
+        self.hedge_data_txt.write(time.strftime('%H:%M:%S', localtime) + ' | ' + '对冲判断前......' + '\n' + 'order for hedge：' + str(self.order_for_hg) + '\n' + 'Ft for hg：' + str(self.Ft_for_hg) + '\n' + 'Opt for hg：' + str(self.Opt_for_hg) + '\n')
 
 
-        self.order_for_hedge[hedge_strategy] = {}
-        self.Opt_for_which_copy = copy.deepcopy(self.Opt_for_which)
+        self.order_for_hg[hedge_strategy] = {}
+        self.Opt_for_hg_copy = copy.deepcopy(self.Opt_for_hg)
 
+
+        # 模式
+        if_mm = self.hg_boxlist[hedge_index]['mm'].get()
+        if_an = self.hg_boxlist[hedge_index]['an'].get()
+
+
+        # 分配greeks
+        def loc(total: float, con: float):
+            if total * con <= 0:
+                return 0
+            if abs(con) <= abs(total):
+                return con
+            else:
+                return total
+
+        if not if_an:
+            sign = np.sign(total_greeks)
+            not_an_sty = [sty for sty in list(self.hg_data[hedge_strategy]['delta$(万)'].keys()) if sty not in [FutureType.IF, FutureType.IH] and self.hg_data[hedge_strategy]['position']['type'][sty] and sum(self.hg_data[hedge_strategy][hedge_greeks][sty].values()) * sign > 0]
+            pre_location = {}
+            for sty in not_an_sty:
+                loc_greeks = total_greeks * sum(self.hg_data[hedge_strategy][hedge_greeks][sty].values()) / sum([sum(self.hg_data[hedge_strategy][hedge_greeks][_sty].values()) for _sty in not_an_sty])
+                pre_location[sty] = {Maturity.M1: loc(loc_greeks, self.hg_data[hedge_strategy]['delta$(万)'][sty][Maturity.M1]), Maturity.M2: 0}
+                pre_location[sty][Maturity.M2] = loc(loc_greeks - pre_location[sty][Maturity.M1], self.hg_data[hedge_strategy]['delta$(万)'][sty][Maturity.M2])
+                pre_location[sty][Maturity.M1] = loc_greeks - pre_location[sty][Maturity.M2]
+
+
+        # 分品种，分月份
         for i, sty in enumerate([StockType.etf50, StockType.h300, StockType.s300, StockType.gz300]):
-            if not self.hedge_data[hedge_strategy]['position']['type'][sty]:
+
+            if if_an and not self.hg_data[hedge_strategy]['position']['type'][sty]:
                 continue
-            for j, mat in enumerate(list(self.hedge_data[hedge_strategy][hedge_greeks][sty].keys())):
-                if not self.hedge_data[hedge_strategy]['position']['mat'][sty][mat]:
+            if not if_an and not sty in not_an_sty:
+                continue
+
+            for j, mat in enumerate(list(self.hg_data[hedge_strategy][hedge_greeks][sty].keys())):
+
+                if if_an and not self.hg_data[hedge_strategy]['position']['mat'][sty][mat]:
                     continue
+                if not if_an and not mat in [Maturity.M1, Maturity.M2]:
+                    continue
+
 
                 if i == 0:
                     future_type = FutureType.IH
                 else:
                     future_type = FutureType.IF
                 mat_future = data_opt[future_type].matlist[np.argmin(abs(np.array([int(Mat['contract_format'][future_type][mat0]) for mat0 in data_opt[future_type].matlist]) - int(Mat['contract_format'][sty][mat])))]
-                if hedge_way == '先期货后合成' and self.hg_boxlist['mm'].get():
-                    if not self.hg_boxlist[future_type].get() == 0:
-                        mat_future = Maturity(self.hg_boxlist[future_type].get())
+                if hedge_way == '先期货后合成' and if_mm:
+                    if not self.hg_boxlist[hedge_index][future_type].get() == 0:
+                        mat_future = Maturity(self.hg_boxlist[hedge_index][future_type].get())
 
 
                 # 期货对冲
                 pre_future = 0
-                if (hedge_strategy, sty, mat) in self.Ft_for_which.keys():
-                    pre_future = sum([self.Ft_for_which[(hedge_strategy, sty, mat)][mat_from_future] * data_opt[future_type].midbidaskspread(mat_from_future) * data_opt[future_type].cm * 1 / 10000 for mat_from_future in self.Ft_for_which[(hedge_strategy, sty, mat)].keys()])
+                if (hedge_strategy, sty, mat) in list(self.Ft_for_hg.keys()):
+                    pre_future = sum([self.Ft_for_hg[(hedge_strategy, sty, mat)][mat_from_future] * data_opt[future_type].midbidaskspread(mat_from_future) * data_opt[future_type].cm * 1 / 10000 for mat_from_future in list(self.Ft_for_hg[(hedge_strategy, sty, mat)].keys())])
 
                 def of(oo: tuple):
                     opt_c = name_to_data(oo[2][0])
@@ -1719,10 +1771,14 @@ class monitor_yield(object):
                     return data_opt[used_sty].S[used_mat] * data_opt[used_sty].cm * (opt_c.delta() - opt_p.delta()) / 10000
 
                 pre_option = 0
-                if (hedge_strategy, sty, mat) in self.Opt_for_which_copy.keys():
-                    pre_option = sum([self.Opt_for_which_copy[(hedge_strategy, sty, mat)][oo] * of(oo) for oo in self.Opt_for_which_copy[(hedge_strategy, sty, mat)].keys()])
+                if (hedge_strategy, sty, mat) in list(self.Opt_for_hg_copy.keys()):
+                    pre_option = sum([self.Opt_for_hg_copy[(hedge_strategy, sty, mat)][oo] * of(oo) for oo in list(self.Opt_for_hg_copy[(hedge_strategy, sty, mat)].keys())])
 
-                current_greeks = self.hedge_data[hedge_strategy][hedge_greeks][sty][mat] + pre_future + pre_option - sum([sum([self.Opt_for_which_copy[hsm][oo] * of(oo) for oo in self.Opt_for_which_copy[hsm].keys() if oo[0:2] == (sty, mat)]) for hsm in self.Opt_for_which_copy.keys()])
+                current_greeks = 0
+                if if_an:
+                    current_greeks = self.hg_data[hedge_strategy][hedge_greeks][sty][mat] + pre_future + pre_option - sum([sum([self.Opt_for_hg_copy[hsm][oo] * of(oo) for oo in list(self.Opt_for_hg_copy[hsm].keys()) if oo[0:2] == (sty, mat)]) for hsm in list(self.Opt_for_hg_copy.keys())])
+                else:
+                    current_greeks = pre_location[sty][mat]
                 future_tool = data_opt[future_type].midbidaskspread(mat_future) * data_opt[future_type].cm * 1 / 10000
 
                 num_future = 0
@@ -1737,13 +1793,13 @@ class monitor_yield(object):
                 option_tool = 0
                 contract_for_option = ()
                 br = False
-                for hedge_sty in self.hedge_change_list[sty]:
+                for hedge_sty in self.hg_change_list[sty]:
                     if br:
                         break
 
-                    mat_list = [Maturity.M1, Maturity.M2]
-                    if self.hg_boxlist['mm'].get():
-                        mat_list = [mm_mat for mm_mat in list(self.hg_boxlist[hedge_sty].keys()) if self.hg_boxlist[hedge_sty][mm_mat].get()]
+                    mat_list = [mat, Maturity.M1, Maturity.M2]
+                    if if_mm:
+                        mat_list = [mm_mat for mm_mat in list(self.hg_boxlist[hedge_index][hedge_sty].keys()) if self.hg_boxlist[hedge_index][hedge_sty][mm_mat].get()]
 
                     for z, hedge_mat in enumerate(mat_list):
                         if br:
@@ -1781,63 +1837,49 @@ class monitor_yield(object):
 
                 # for future
                 if not num_future == 0:
-                    if contract_for_future not in self.order_for_hedge[hedge_strategy].keys():
-                        self.order_for_hedge[hedge_strategy][contract_for_future] = 0
-                    self.order_for_hedge[hedge_strategy][contract_for_future] -= num_future
+                    if contract_for_future not in list(self.order_for_hg[hedge_strategy].keys()):
+                        self.order_for_hg[hedge_strategy][contract_for_future] = 0
+                    self.order_for_hg[hedge_strategy][contract_for_future] -= num_future
 
-                    # futures for hegde written in Ft_for_which
-                    if (hedge_strategy, sty, mat) not in self.Ft_for_which.keys():
-                        self.Ft_for_which[(hedge_strategy, sty, mat)] = {}
-                    if mat_future not in self.Ft_for_which[(hedge_strategy, sty, mat)].keys():
-                        self.Ft_for_which[(hedge_strategy, sty, mat)][mat_future] = 0 # 持仓
-                    self.Ft_for_which[(hedge_strategy, sty, mat)][mat_future] -= num_future
+                    # futures for hegde written in Ft_for_hg
+                    if (hedge_strategy, sty, mat) not in list(self.Ft_for_hg.keys()):
+                        self.Ft_for_hg[(hedge_strategy, sty, mat)] = {}
+                    if mat_future not in list(self.Ft_for_hg[(hedge_strategy, sty, mat)].keys()):
+                        self.Ft_for_hg[(hedge_strategy, sty, mat)][mat_future] = 0 # 持仓
+                    self.Ft_for_hg[(hedge_strategy, sty, mat)][mat_future] -= num_future
 
                 # for option
                 if not num_opt == 0:
                     for z, ctr in enumerate(contract_for_option):
-                        if ctr not in self.order_for_hedge[hedge_strategy].keys():
-                            self.order_for_hedge[hedge_strategy][ctr] = 0
+                        if ctr not in list(self.order_for_hg[hedge_strategy].keys()):
+                            self.order_for_hg[hedge_strategy][ctr] = 0
                         if z == 0:
-                            self.order_for_hedge[hedge_strategy][ctr] -= num_opt
+                            self.order_for_hg[hedge_strategy][ctr] -= num_opt
                         else:
-                            self.order_for_hedge[hedge_strategy][ctr] += num_opt
+                            self.order_for_hg[hedge_strategy][ctr] += num_opt
 
-                    # options for hegde written in Opt_for_which
-                    if not (sty, mat) == option_chosen[:2]:
-                        if (hedge_strategy, sty, mat) not in self.Opt_for_which.keys():
-                            self.Opt_for_which[(hedge_strategy, sty, mat)] = {}
-                        if option_chosen not in self.Opt_for_which[(hedge_strategy, sty, mat)].keys():
-                            self.Opt_for_which[(hedge_strategy, sty, mat)][option_chosen] = 0 # 持仓 for call
-                        self.Opt_for_which[(hedge_strategy, sty, mat)][option_chosen] -= num_opt
+                    # options for hegde written in Opt_for_hg
+                    if if_an and not (sty, mat) == option_chosen[:2]:
+                        if (hedge_strategy, sty, mat) not in list(self.Opt_for_hg.keys()):
+                            self.Opt_for_hg[(hedge_strategy, sty, mat)] = {}
+                        if option_chosen not in list(self.Opt_for_hg[(hedge_strategy, sty, mat)].keys()):
+                            self.Opt_for_hg[(hedge_strategy, sty, mat)][option_chosen] = 0 # 持仓 for call
+                        self.Opt_for_hg[(hedge_strategy, sty, mat)][option_chosen] -= num_opt
 
 
-        self.hedge_data_txt.write(time.strftime('%H:%M:%S', localtime) + ' | ' + '对冲判断后......' + '\n' + 'order for hedge：' + hedge_strategy + str(self.order_for_hedge[hedge_strategy]) + '\n' + 'Ft for which：' + str(self.Ft_for_which) + '\n' + 'Opt for which：' + str(self.Opt_for_which) + '\n')
+        self.hedge_data_txt.write(time.strftime('%H:%M:%S', localtime) + ' | ' + '对冲判断后......' + '\n' + 'order for hedge：' + hedge_strategy + str(self.order_for_hg[hedge_strategy]) + '\n' + 'Ft for hg：' + str(self.Ft_for_hg) + '\n' + 'Opt for hg：' + str(self.Opt_for_hg) + '\n')
         self.hedge_data_txt.flush()
 
 
         # 下单
-        for target in self.order_for_hedge[hedge_strategy].keys():
-            num = self.order_for_hedge[hedge_strategy][target]
+        for target in list(self.order_for_hg[hedge_strategy].keys()):
+            num = self.order_for_hg[hedge_strategy][target]
+            self.order_api(target, 'HIT', num, hedge_strategy, 'hedge')
 
-            if num > 0:
-                price = 'ASK+1T'
-            elif num < 0:
-                price = 'BID-1T'
+        self.hg_p_update_list[hedge_index] = list(self.order_for_hg[hedge_strategy].keys())
 
-            self.order_api(target, price, num, hedge_strategy)
-
-        self.hedge_p_update_list = list(self.order_for_hedge[hedge_strategy].keys())
-
-        if self.order_for_hedge[hedge_strategy] == {}:
-            self.order_for_hedge.pop(hedge_strategy)
-
-
-    def stop_hedge(self):
-
-        if self.hedge_ongoing_flag:
-            self.hg_root.after_cancel(self.hedge_ongoing)
-            self.hedge_state.set('对冲')
-            self.hedge_ongoing_flag = False
+        if self.order_for_hg[hedge_strategy] == {}:
+            self.order_for_hg.pop(hedge_strategy)
 
 
     ##############################################################################################################
@@ -1937,8 +1979,8 @@ class monitor_yield(object):
         if self.mp_boxlist[0][2].get() == '当日最大总收益':
                 self.max_total_profit[self.mp_boxlist[0][0].get()].set('{:g}'.format(float(self.mp_boxlist[0][3].get())))
         else:
-            if self.mp_boxlist[0][0].get() in self.label_var.keys():
-                if self.mp_boxlist[0][1].get() in self.label_var[self.mp_boxlist[0][0].get()].keys():
+            if self.mp_boxlist[0][0].get() in list(self.label_var.keys()):
+                if self.mp_boxlist[0][1].get() in list(self.label_var[self.mp_boxlist[0][0].get()].keys()):
                     self.label_var[self.mp_boxlist[0][0].get()][self.mp_boxlist[0][1].get()][self.mp_boxlist[0][2].get()].set('{:g}'.format(float(self.mp_boxlist[0][3].get())))
 
 
@@ -2207,9 +2249,7 @@ def main():
     t2 = threading.Thread(target = quote_sub_th,args=(g_QuoteZMQ,q_data,))
     t2.start()
 
-    #time.sleep(15)
-
-    while not t2.isAlive():
+    while not t2.is_alive():
         pass
 
 
