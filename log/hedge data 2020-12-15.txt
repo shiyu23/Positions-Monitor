@@ -1,0 +1,8 @@
+11:13:22 | ∂‘≥Â≈–∂œ«∞......
+order for hedge£∫{}
+Ft for hg£∫{}
+Opt for hg£∫{}
+11:13:22 | ∂‘≥Â≈–∂œ∫Û......
+order for hedge£∫≤‚ ‘{'TC.F.CFFEX.IF.202012': 15.0, 'TC.O.CFFEX.IO.202012.C.4900': 1.0, 'TC.O.CFFEX.IO.202012.P.4900': -1.0}
+Ft for hg£∫{('≤‚ ‘', <StockType.gz300: 3>, <Maturity.M1: 1>): {<Maturity.M1: 1>: 15.0}}
+Opt for hg£∫{}
