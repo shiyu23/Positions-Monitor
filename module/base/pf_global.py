@@ -1,6 +1,8 @@
+from tkinter import *
 from tcoreapi_mq import *
 import calendar
 import time
+import os
 
 from .pf_enum import *
 from . import pf_data
@@ -10,51 +12,77 @@ def _init():
 
     global global_var
 
-    tmq = {'g_TradeZMQ': tcore_zmq(), 'g_QuoteZMQ': tcore_zmq(), 'g_TradeSession': None, 'g_QuoteSession': None, 't_data': None, 'q_data': None, 'exit_signal': 0}
+    mq = {'g_TradeZMQ': tcore_zmq("ZMQ","8076c9867a372d2a9a814ae710c256e2"), 'g_QuoteZMQ': tcore_zmq("ZMQ","8076c9867a372d2a9a814ae710c256e2"), 'g_TradeSession': None, 'g_QuoteSession': None, 't_data': None, 'q_data': None, 'account': {'index': None, 'stock': None, 'sim': None}, 'g_TradeZMQKeepAlive': None, 'g_QuoteZMQKeepAlive': None, 'exit_signal': 0}
 
-    # 封装 cd C:\Users\pengs\Desktop\profit
-    # 封装 pyinstaller -F main.py -w -i ./pictures/logo.ico
+    # 封装 cd C:\Users\pengs\Desktop\策略持仓监控
+    # 封装 pyinstaller -F __main__.py -w -i ./pictures/logo.ico -n 策略持仓监控
 
-    t_data = tmq['g_TradeZMQ'].trade_connect("51848") # 公版
-    q_data = tmq['g_QuoteZMQ'].quote_connect("51878")
+    root = Tk()
+    root.resizable(0, 0)
+    root.title('连线选择')
+    root.iconbitmap(default=r'./pictures/logo.ico')
+    root.geometry("%dx%d+%d+%d" % (300, 50, root.winfo_screenwidth()/2-150, root.winfo_screenheight()/2-150))
 
-    #t_data = tmq['g_TradeZMQ'].trade_connect("51492") # 方正2
-    #q_data = tmq['g_QuoteZMQ'].quote_connect("51522")
+    def choice1():
+        mq['t_data'] = mq['g_TradeZMQ'].trade_connect("51848") # 公版
+        mq['q_data'] = mq['g_QuoteZMQ'].quote_connect("51878")
+        root.destroy()
 
-    if q_data["Success"] != "OK":
+    def choice2():
+        mq['t_data'] = mq['g_TradeZMQ'].trade_connect("51879") # 方正1
+        mq['q_data'] = mq['g_QuoteZMQ'].quote_connect("51909")
+        root.destroy()
+
+    def choice3():
+        mq['t_data'] = mq['g_TradeZMQ'].trade_connect("51492") # 方正2
+        mq['q_data'] = mq['g_QuoteZMQ'].quote_connect("51522")
+        root.destroy()
+
+    b = Button(root, text='公版', width=10, command=choice1)
+    b.grid(row=0, column= 0, columnspan=1, sticky=W, padx=10, pady=10)
+
+    b = Button(root, text='方正1', width=10, command=choice2)
+    b.grid(row=0, column= 1, columnspan=1, sticky=W, padx=10, pady=10)
+
+    b = Button(root, text='方正2', width=10, command=choice3)
+    b.grid(row=0, column= 2, columnspan=1, sticky=W, padx=10, pady=10)
+
+    def callback():
+        root.destroy()
+        mq['exit_signal'] = 1
+        os._exit(0)
+    root.protocol("WM_DELETE_WINDOW", callback)
+
+    root.mainloop()
+
+    if mq['q_data']["Success"] != "OK":
         print("[quote]connection failed")
         return
 
-    if t_data["Success"] != "OK":
+    if mq['t_data']["Success"] != "OK":
         print("[trade]connection failed")
         return
 
-    tmq['g_TradeSession'] = t_data["SessionKey"]
-    tmq['g_QuoteSession'] = q_data["SessionKey"]
-    tmq['t_data'] = t_data
-    tmq['q_data'] = q_data
+    mq['g_TradeSession'] = mq['t_data']["SessionKey"]
+    mq['g_QuoteSession'] = mq['q_data']["SessionKey"]
+
+    mq['g_TradeZMQKeepAlive'] = KeepAliveHelper(mq['t_data']["SubPort"], mq['g_TradeSession'], mq['g_TradeZMQ'])
+    mq['g_QuoteZMQKeepAlive'] = KeepAliveHelper(mq['q_data']["SubPort"], mq['g_QuoteSession'], mq['g_QuoteZMQ'])
+
+    accountInfo = mq['g_TradeZMQ'].account_lookup(mq['g_TradeSession'])
+    if not accountInfo == None:
+        arrInfo = accountInfo["Accounts"]
+        if not len(arrInfo) == 0:
+            for act in arrInfo:
+                if act["BrokerID"][:8] == 'CTP_GTAX':
+                    mq['account']['index'] = act
+                elif act["BrokerID"] == 'FGS_OPT_FZZQ_YD':
+                    mq['account']['stock'] = act
+                elif act["BrokerID"] == 'M2_SIM3' and act["AccountType"] == 'FO':
+                    mq['account']['sim'] = act
 
 
-    holiday = (calendar.datetime.date(2020, 1, 1),
-                          calendar.datetime.date(2020, 1, 24),
-                          calendar.datetime.date(2020, 1, 27),
-                          calendar.datetime.date(2020, 1, 28),
-                          calendar.datetime.date(2020, 1, 29),
-                          calendar.datetime.date(2020, 1, 30),
-                          calendar.datetime.date(2020, 4, 6),
-                          calendar.datetime.date(2020, 5, 1),
-                          calendar.datetime.date(2020, 5, 4),
-                          calendar.datetime.date(2020, 5, 5),
-                          calendar.datetime.date(2020, 6, 25),
-                          calendar.datetime.date(2020, 6, 26),
-                          calendar.datetime.date(2020, 10, 1),
-                          calendar.datetime.date(2020, 10, 2),
-                          calendar.datetime.date(2020, 10, 5),
-                          calendar.datetime.date(2020, 10, 6),
-                          calendar.datetime.date(2020, 10, 7),
-                          calendar.datetime.date(2020, 10, 8),
-
-                          calendar.datetime.date(2021, 1, 1),
+    holiday = (calendar.datetime.date(2021, 1, 1),
                           calendar.datetime.date(2021, 2, 11),
                           calendar.datetime.date(2021, 2, 12),
                           calendar.datetime.date(2021, 2, 15),
@@ -62,6 +90,8 @@ def _init():
                           calendar.datetime.date(2021, 2, 17),
                           calendar.datetime.date(2021, 4, 5),
                           calendar.datetime.date(2021, 5, 3),
+                          calendar.datetime.date(2021, 5, 4),
+                          calendar.datetime.date(2021, 5, 5),
                           calendar.datetime.date(2021, 6, 14),
                           calendar.datetime.date(2021, 9, 20),
                           calendar.datetime.date(2021, 9, 21),
@@ -70,7 +100,27 @@ def _init():
                           calendar.datetime.date(2021, 10, 5),
                           calendar.datetime.date(2021, 10, 6),
                           calendar.datetime.date(2021, 10, 7),
-        ) # 2020 + 2021
+
+                          calendar.datetime.date(2022, 1, 3),
+                          calendar.datetime.date(2022, 1, 31),
+                          calendar.datetime.date(2022, 2, 1),
+                          calendar.datetime.date(2022, 2, 2),
+                          calendar.datetime.date(2022, 2, 3),
+                          calendar.datetime.date(2022, 2, 4),
+                          calendar.datetime.date(2022, 4, 4),
+                          calendar.datetime.date(2022, 4, 5),
+                          calendar.datetime.date(2022, 5, 2),
+                          calendar.datetime.date(2022, 5, 3),
+                          calendar.datetime.date(2022, 5, 4),
+                          calendar.datetime.date(2022, 5, 5),
+                          calendar.datetime.date(2022, 6, 3),
+                          calendar.datetime.date(2022, 9, 12),
+                          calendar.datetime.date(2022, 10, 3),
+                          calendar.datetime.date(2022, 10, 4),
+                          calendar.datetime.date(2022, 10, 5),
+                          calendar.datetime.date(2022, 10, 6),
+                          calendar.datetime.date(2022, 10, 7),
+        ) # 2021 + 2022
 
     str_to_type: dict = {}
     type_to_str: dict = {}
@@ -89,8 +139,8 @@ def _init():
         for ty in [StockType.gz300, StockType.etf50, StockType.h300, StockType.s300, FutureType.IF, FutureType.IH]:
             Mat[format][ty] = []
 
-    global_var = {'holiday': holiday, 'str_to_type': str_to_type, 'type_to_str': type_to_str, 'Mat': Mat, 'localtime': time.localtime(), 'trade_period': False, 'QuoteID': [], 'data_opt': {}, 'hg_data': {}, 'hg_order': {'order': {}, 'Ft': {}, 'Opt': {}}, 'hg_index': {}}
-    global_var.update(tmq)
+    global_var = {'holiday': holiday, 'str_to_type': str_to_type, 'type_to_str': type_to_str, 'Mat': Mat, 'localtime': time.localtime(), 'trade_period': False, 'QuoteID': [], 'data_opt': {}, 'stg_greeks': {}, 'hg_index': {}, 'hg_order': {'order': {}, 'Ft': {}, 'Opt': {}}, 'bd_index': {}, 'bd_order': {'order': {}}}
+    global_var.update(mq)
     sub_all_options() # get Mat, QuoteID, data_opt
 
 
@@ -184,10 +234,8 @@ def sub_all_options():
     for fty in [FutureType.IF, FutureType.IH]:
         data_opt[fty] = pf_data.FutureData(fty)
 
-    quote_obj = {"Symbol":"ok", "SubDataType":"REALTIME"}
     for i in QuoteID:
-        quote_obj["Symbol"] = i
-        global_var['g_QuoteZMQ'].subquote(global_var['g_QuoteSession'],quote_obj)
+        global_var['g_QuoteZMQ'].subquote(global_var['g_QuoteSession'],i)
 
 
 def last_C_P(string: str):

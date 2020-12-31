@@ -1,3 +1,4 @@
+from scipy.interpolate import CubicSpline
 import numpy as np
 import calendar
 import math
@@ -114,13 +115,13 @@ class OptData: # one stock type
         if sty == StockType.gz300:
             self.cm = 100
             self.mc = 0.2
-            self.p_limit = 20
+            self.p_limit = 10
             self.tick_limit = 15
             self.matlist = [Maturity.M1, Maturity.M2, Maturity.M3, Maturity.Q1, Maturity.Q2, Maturity.Q3]
         elif sty in [StockType.etf50, StockType.h300, StockType.s300]:
             self.cm = 10000
             self.mc = 0.0001
-            self.p_limit = 0.01
+            self.p_limit = 0.003
             self.tick_limit = 10
             self.matlist = [Maturity.M1, Maturity.M2, Maturity.Q1, Maturity.Q2]
         for mat in self.matlist:
@@ -192,6 +193,25 @@ class OptData: # one stock type
         self.S[mat] = avg
         self.posi[mat] = np.argmin(abs(np.array(self.k_list[mat]) - avg))
         self.k0[mat] = optlist[self.posi[mat]][0].K
+
+    def vix(self, mat: Maturity): # 计算vix
+        k_list_copy = self.k_list[mat].copy()
+        k1 = k_list_copy[np.argmin(abs(np.array(k_list_copy) - self.S[mat]))]
+        k_list_copy.remove(k1)
+        k2 = k_list_copy[np.argmin(abs(np.array(k_list_copy) - self.S[mat]))]
+        k_list_copy.remove(k2)
+        k3 = k_list_copy[np.argmin(abs(np.array(k_list_copy) - self.S[mat]))]
+        k_list_copy.remove(k3)
+
+        [k1, k2, k3] = sorted([k1, k2, k3])
+
+        opt1 = self.OptionList[mat][self.k_list[mat].index(k1)]
+        opt2 = self.OptionList[mat][self.k_list[mat].index(k2)]
+        opt3 = self.OptionList[mat][self.k_list[mat].index(k3)]
+        x = [opt1[0].K, opt2[0].K, opt3[0].K]
+        y = [(opt1[0].iv() + opt1[1].iv()) / 2, (opt2[0].iv() + opt2[1].iv()) / 2, (opt3[0].iv() + opt3[1].iv()) / 2]
+        cs = CubicSpline(x, y)
+        return cs(self.S[mat])
 
 
 class FutureData:
