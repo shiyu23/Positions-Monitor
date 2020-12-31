@@ -1,11 +1,13 @@
 from tkinter import *
 from tkinter import ttk
 import threading
+import numpy as np
 import time
 import copy
 
+from module.base.pf_enum import *
 from ..base import pf_global as gl
-from ..base.pf_data import *
+from ..base import pf_order as od
 
 
 class hedge:
@@ -22,46 +24,6 @@ class hedge:
         self.data_txt = open(f'./log/hedge data {localtime.tm_year}-{localtime.tm_mon}-{localtime.tm_mday}.txt', 'a')
 
 
-    def order_api(self, target: str, price: str, num: int, strategy: str, source: str):
-        # 查询持仓
-        g_TradeZMQ = gl.get_value('g_TradeZMQ')
-        g_TradeSession = gl.get_value('g_TradeSession')
-
-        accountInfo = g_TradeZMQ.account_lookup(g_TradeSession)
-        if accountInfo != None:
-            arrInfo = accountInfo["Accounts"]
-            if len(arrInfo) != 0:
-                strAccountMask = arrInfo[0]["AccountMask"]
-
-        g_TradeZMQ.position(g_TradeSession,strAccountMask,"")
-
-        if num == 0:
-            return
-
-        side = '1' if num > 0 else '2'
-        if price == 'HIT':
-            Price = 'ASK+0' if side == '1' else 'BID+0'
-        else:
-            return
-
-        Param = {
-
-        'BrokerID':arrInfo[0]['BrokerID'],
-        'Account':arrInfo[0]['Account'],
-        'Symbol':target,
-        'Side':side,
-        'Price':Price,
-        'TimeInForce':'2',# 'IOC | FAK'
-        'OrderType':'2',
-        'OrderQty':str(abs(num)),
-        'PositionEffect':'4',
-        'UserKey1': strategy,
-        'UserKey2': source,
-
-        }
-        print(g_TradeZMQ.new_order(g_TradeSession,Param))
-
-
     def open_hedge_ui(self, strategies, geometry):
         self.init_hedge_ui(strategies, geometry)
 
@@ -74,7 +36,7 @@ class hedge:
         root = Toplevel()
         root.title('对冲')
         index = [i for i, x in enumerate(geometry) if x == '+']
-        root.geometry("%dx%d+%d+%d" % (750, 300, int(geometry[index[0] + 1 : index[1]]), int(geometry[index[1] + 1 :]) + 100))
+        root.geometry("%dx%d+%d+%d" % (750, 300, int(geometry[index[0] + 1 : index[1]]), int(geometry[index[1] + 1 :]) + 500))
         canvas = Canvas(root, borderwidth=0)
         frame = Frame(canvas)
         self.root = frame
@@ -133,7 +95,7 @@ class hedge:
         b = Button(self.root, textvariable=self.state, command=self.hedge_thread, width=10)
         b.grid(row=2, column=5, sticky=E, padx=5, pady=10)
 
-        b = Button(self.root, text="停止对冲", command=self.stop_hedge, width=10)
+        b = Button(self.root, text='停止对冲', command=self.stop_hedge, width=10)
         b.grid(row=2, column=6, sticky=E, padx=5, pady=10)
 
 
@@ -262,6 +224,9 @@ class hedge:
         if self.state.get() == '对冲中......':
             self.root.after_cancel(self.ongoing)
             self.state.set('对冲')
+            self.boxlist[0][0].configure(state='normal')
+            self.boxlist[0][1].configure(state='normal')
+            self.boxlist[0][2].configure(state='normal')
 
 
     def hedge(self):
@@ -278,6 +243,9 @@ class hedge:
 
         if self.state.get() == '对冲':
             self.state.set('对冲中......')
+            self.boxlist[0][0].configure(state='disabled')
+            self.boxlist[0][1].configure(state='disabled')
+            self.boxlist[0][2].configure(state='disabled')
 
 
         trade_period = gl.get_value('trade_period')
@@ -285,26 +253,27 @@ class hedge:
         if not trade_period or (localtime.tm_hour == 9 and localtime.tm_min < 33) or (localtime.tm_hour == 11 and localtime.tm_min > 26) or (localtime.tm_hour == 13 and localtime.tm_min < 3):
             return
 
+        if not self.p_update_flag:
+            return
+
+        stg_greeks = gl.get_value('stg_greeks')
+        total_greeks = sum([sum(stg_greeks[hedge_strategy][hedge_greeks][sty].values()) for sty in list(stg_greeks[hedge_strategy][hedge_greeks].keys())])
+        if abs(hedge_thred) > abs(total_greeks):
+            return
+
         order = gl.get_value('hg_order')['order']
         if hedge_strategy in list(order.keys()):
             return
 
-        hg_data = gl.get_value('hg_data')
-        total_greeks = sum([sum(hg_data[hedge_strategy][hedge_greeks][sty].values()) for sty in list(hg_data[hedge_strategy][hedge_greeks].keys())])
-        if abs(hedge_thred) > abs(total_greeks):
-            return
-
-        if not self.p_update_flag:
-            return
+        order[hedge_strategy] = {}
 
 
         Ft = gl.get_value('hg_order')['Ft']
         Opt = gl.get_value('hg_order')['Opt']
-        self.data_txt.write(time.strftime('%H:%M:%S', localtime) + ' | ' + '对冲判断前......' + '\n' + 'order for hedge：' + str(order) + '\n' + 'Ft for hg：' + str(Ft) + '\n' + 'Opt for hg：' + str(Opt) + '\n')
-
-
-        order[hedge_strategy] = {}
         Opt_for_hg_copy = copy.deepcopy(Opt)
+
+
+        self.data_txt.write(time.strftime('%H:%M:%S', localtime) + ' | ' + '对冲判断前......' + '\n' + 'order for hedge：' + str(order) + '\n' + 'Ft for hg：' + str(Ft) + '\n' + 'Opt for hg：' + str(Opt) + '\n')
 
 
         # 模式
@@ -323,12 +292,12 @@ class hedge:
 
         if not if_an:
             sign = np.sign(total_greeks)
-            not_an_sty = [sty for sty in list(hg_data[hedge_strategy]['delta$(万)'].keys()) if sty not in [FutureType.IF, FutureType.IH] and hg_data[hedge_strategy]['position']['type'][sty] and sum(hg_data[hedge_strategy][hedge_greeks][sty].values()) * sign > 0]
+            not_an_sty = [sty for sty in list(stg_greeks[hedge_strategy]['delta$(万)'].keys()) if sty not in [FutureType.IF, FutureType.IH] and stg_greeks[hedge_strategy]['position']['type'][sty] and sum(stg_greeks[hedge_strategy][hedge_greeks][sty].values()) * sign > 0]
             pre_location = {}
             for sty in not_an_sty:
-                loc_greeks = total_greeks * sum(hg_data[hedge_strategy][hedge_greeks][sty].values()) / sum([sum(hg_data[hedge_strategy][hedge_greeks][_sty].values()) for _sty in not_an_sty])
-                pre_location[sty] = {Maturity.M1: loc(loc_greeks, hg_data[hedge_strategy]['delta$(万)'][sty][Maturity.M1]), Maturity.M2: 0}
-                pre_location[sty][Maturity.M2] = loc(loc_greeks - pre_location[sty][Maturity.M1], hg_data[hedge_strategy]['delta$(万)'][sty][Maturity.M2])
+                loc_greeks = total_greeks * sum(stg_greeks[hedge_strategy][hedge_greeks][sty].values()) / sum([sum(stg_greeks[hedge_strategy][hedge_greeks][_sty].values()) for _sty in not_an_sty])
+                pre_location[sty] = {Maturity.M1: loc(loc_greeks, stg_greeks[hedge_strategy]['delta$(万)'][sty][Maturity.M1]), Maturity.M2: 0}
+                pre_location[sty][Maturity.M2] = loc(loc_greeks - pre_location[sty][Maturity.M1], stg_greeks[hedge_strategy]['delta$(万)'][sty][Maturity.M2])
                 pre_location[sty][Maturity.M1] = loc_greeks - pre_location[sty][Maturity.M2]
 
 
@@ -337,14 +306,14 @@ class hedge:
         # 分品种，分月份
         for i, sty in enumerate([StockType.etf50, StockType.h300, StockType.s300, StockType.gz300]):
 
-            if if_an and not hg_data[hedge_strategy]['position']['type'][sty]:
+            if if_an and not stg_greeks[hedge_strategy]['position']['type'][sty]:
                 continue
             if not if_an and not sty in not_an_sty:
                 continue
 
-            for j, mat in enumerate(list(hg_data[hedge_strategy][hedge_greeks][sty].keys())):
+            for j, mat in enumerate(list(stg_greeks[hedge_strategy][hedge_greeks][sty].keys())):
 
-                if if_an and not hg_data[hedge_strategy]['position']['mat'][sty][mat]:
+                if if_an and not stg_greeks[hedge_strategy]['position']['mat'][sty][mat]:
                     continue
                 if not if_an and not mat in [Maturity.M1, Maturity.M2]:
                     continue
@@ -384,10 +353,13 @@ class hedge:
 
                 current_greeks = 0
                 if if_an:
-                    current_greeks = hg_data[hedge_strategy][hedge_greeks][sty][mat] + pre_future + pre_option - sum([sum([Opt_for_hg_copy[hsm][oo] * of(oo) for oo in list(Opt_for_hg_copy[hsm].keys()) if oo[0:2] == (sty, mat)]) for hsm in list(Opt_for_hg_copy.keys())])
+                    current_greeks = stg_greeks[hedge_strategy][hedge_greeks][sty][mat] + pre_future + pre_option - sum([sum([Opt_for_hg_copy[hsm][oo] * of(oo) for oo in list(Opt_for_hg_copy[hsm].keys()) if oo[0:2] == (sty, mat)]) for hsm in list(Opt_for_hg_copy.keys())])
                 else:
                     current_greeks = pre_location[sty][mat]
-                future_tool = data_opt[future_type].midbidaskspread(mat_future) * data_opt[future_type].cm * 1 / 10000
+
+                future_tool = float('inf')
+                if not data_opt[future_type].midbidaskspread(mat_future) == None:
+                    future_tool = data_opt[future_type].midbidaskspread(mat_future) * data_opt[future_type].cm * 1 / 10000
 
                 num_future = 0
                 if hedge_way == '先期货后合成':
@@ -406,14 +378,14 @@ class hedge:
                         break
 
                     mat_list = [mat, Maturity.M1, Maturity.M2]
+                    if mat == Maturity.M1:
+                        mat_list = mat_list[1:]
+
                     if if_mm:
                         mat_list = [mm_mat for mm_mat in list(self.boxlist[hedge_sty].keys()) if self.boxlist[hedge_sty][mm_mat].get()]
 
                     for z, hedge_mat in enumerate(mat_list):
                         if br:
-                            break
-
-                        if z == 1 and mat_list[1] == mat_list[0]:
                             break
 
                         mat_atm = data_opt[hedge_sty].OptionList[hedge_mat][data_opt[hedge_sty].posi[hedge_mat]]
@@ -440,6 +412,7 @@ class hedge:
 
                 # 合约名初始值已被覆盖
                 if contract_for_future == '' or '' in contract_for_option:
+                    order.pop(hedge_strategy)
                     return
 
 
@@ -478,13 +451,14 @@ class hedge:
         self.data_txt.write(time.strftime('%H:%M:%S', localtime) + ' | ' + '对冲判断后......' + '\n' + 'order for hedge：' + hedge_strategy + str(order[hedge_strategy]) + '\n' + 'Ft for hg：' + str(Ft) + '\n' + 'Opt for hg：' + str(Opt) + '\n')
         self.data_txt.flush()
 
+        if order[hedge_strategy] == {}:
+            order.pop(hedge_strategy)
+            return
 
         # 下单
         for target in list(order[hedge_strategy].keys()):
             num = order[hedge_strategy][target]
-            self.order_api(target, 'HIT', num, hedge_strategy, 'hedge')
+            od.order_api(target, 'HIT', num, hedge_strategy, 'hedge')
 
+        self.p_update_flag = False
         self.p_update_list = list(order[hedge_strategy].keys())
-
-        if order[hedge_strategy] == {}:
-            order.pop(hedge_strategy)
