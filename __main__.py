@@ -37,7 +37,7 @@ class monitor_yield(object):
         self.mp_root_flag = False
 
         self.boxlist = {}
-        self.bs_boxlist = {}
+        self.bs_boxlist = {'': {}, 'hedge': {}, 'build': {}}
         self.checkbutton_context_list = {}
 
         self.strategy_trade_return = {'all_data':[], 'type5': []}
@@ -45,7 +45,8 @@ class monitor_yield(object):
                        '#7FFFAA','#F0E68C','#FF7F50','#C0C0C0','#BA55D3',
                        '#FF4500']
 
-        self.stop_update_max_profit = {}
+        self.bs_update_flag = True
+        self.after_update = {}
 
         # 补单
         self.addin_order = {'id': [], 'report': []}
@@ -556,11 +557,11 @@ class monitor_yield(object):
                 self.strategy2totalprofit[strategy].set('{}\n{}'.format(int(total_profit),
                                                                         int(middle_price_profit)))
 
-                if strategy in list(self.stop_update_max_profit.keys()) and time.time() - self.stop_update_max_profit[strategy] > 5:
-                    self.stop_update_max_profit.pop(strategy)
+                if strategy in list(self.after_update.keys()) and time.time() - self.after_update[strategy] > 5:
+                    self.after_update.pop(strategy)
 
                 trade_period = gl.get_value('trade_period')
-                if trade_period and not ((localtime.tm_hour == 9 and localtime.tm_min == 30) or (localtime.tm_hour == 11 and localtime.tm_min == 29) or (localtime.tm_hour == 13 and localtime.tm_min == 0)) and (middle_price_profit > float(self.max_total_profit[strategy].get())) and (BidPrice1 != AskPrice1 or sty == StockType.gz300) and not quote["TradingPrice"] == '' and strategy not in self.stop_update_max_profit.keys():
+                if trade_period and not ((localtime.tm_hour == 9 and localtime.tm_min == 30) or (localtime.tm_hour == 11 and localtime.tm_min == 29) or (localtime.tm_hour == 13 and localtime.tm_min == 0)) and (middle_price_profit > float(self.max_total_profit[strategy].get())) and (BidPrice1 != AskPrice1 or sty == StockType.gz300) and not quote["TradingPrice"] == '' and strategy not in self.after_update.keys():
                     self.max_total_profit[strategy].set('{:g}'.format(int(middle_price_profit)))
 
                 # greeks
@@ -675,6 +676,9 @@ class monitor_yield(object):
                 if hg_index[index].p_update_list == []:
                     hg_index[index].p_update_flag = True
 
+                hedge_strategy = hg_index[index].boxlist[0][0].get()
+                hg_index[index].far_from_bs_update = False if hedge_strategy in list(self.after_update.keys()) else True
+
         except Exception as e:
             #print(e)
             pass
@@ -703,11 +707,10 @@ class monitor_yield(object):
         root.title('成交回报')
         self.main_root_position = self.main_root.winfo_geometry()
         index = [i for i, x in enumerate(self.main_root_position) if x == '+']
-        root.geometry("%dx%d+%d+%d" % (750, 500, int(self.main_root_position[index[0] + 1 : index[1]]) + 1100, int(self.main_root_position[index[1] + 1 :]) + 400))
+        root.geometry("%dx%d+%d+%d" % (760, 500, int(self.main_root_position[index[0] + 1 : index[1]]) + 1100, int(self.main_root_position[index[1] + 1 :]) + 400))
+
         canvas = Canvas(root, borderwidth=0)
         frame = Frame(canvas)
-        self.bs_root = frame
-        self.bs_root_flag = True
         vsb = Scrollbar(root, orient="vertical", command=canvas.yview)
         canvas.configure(yscrollcommand=vsb.set)
 
@@ -721,13 +724,43 @@ class monitor_yield(object):
 
         frame.bind("<Configure>", lambda event, canvas=canvas: onFrameConfigure(canvas))
 
-        names = ['交易时间', '成交类型','数量', '价格', '合约', '策略']
-        self.bs_names = names
+        def processWheel(event):
+            a= int(-(event.delta)/60)
+            canvas.yview_scroll(a,'units')
 
-        for i, name in enumerate(names):
-            Label(frame, text=name).grid(row=0, column=i, sticky=E + W, padx=10)
+        canvas.bind("<MouseWheel>", processWheel)
+
+        nb = ttk.Notebook(frame)
+        self.bs_nb = nb
+        tab1=Frame(nb)
+        tab1.bind("<MouseWheel>", processWheel)
+        nb.add(tab1,text='手动')
+        tab2=Frame(nb)
+        tab2.bind("<MouseWheel>", processWheel)
+        nb.add(tab2,text='对冲')
+        tab3=Frame(nb)
+        tab3.bind("<MouseWheel>", processWheel)
+        nb.add(tab3,text='建仓')
+        nb.pack()
+
+        def tab_change(*args):
+            self.bs_refresh_signal.append(1)
+
+        nb.bind('<<NotebookTabChanged>>',tab_change)
+
+        self.bs_root = {}
+        self.bs_root[''] = tab1
+        self.bs_root['hedge'] = tab2
+        self.bs_root['build'] = tab3
+        self.bs_root_flag = True
+
+        names = ['交易时间', '成交类型', '数量', '价格', '合约', '策略', '来源']
+        for tab in ['', 'hedge', 'build']:
+            for i, name in enumerate(names):
+                Label(self.bs_root[tab], text=name).grid(row=0, column=i, sticky=E + W, padx=10)
 
         self.bs_refresh()
+
         def callback():
             root.destroy()
             self.bs_root_flag = False
@@ -737,106 +770,132 @@ class monitor_yield(object):
 
     def bs_refresh(self):
 
+        tab = ['', 'hedge', 'build'][self.bs_nb.tabs().index(self.bs_nb.select())]
+
         if len(self.bs_refresh_signal) != 0:
             # 清空信号
             for i in range(len(self.bs_refresh_signal) - 1, -1, -1):
                 self.bs_refresh_signal.pop(i)
 
 
-            for k in list(self.bs_boxlist.keys()):
-                for box in self.bs_boxlist[k]:
+            for k in list(self.bs_boxlist[tab].keys()):
+                if not self.bs_update_flag:
+                    if not k in ['line1', 'line2']:
+                        continue
+
+                for box in self.bs_boxlist[tab][k]:
                     try:
                         box.grid_forget()
                     except:
                         pass
 
-            self.bs_boxlist = {}
+            start_line = 1
+            if not self.bs_update_flag:
+                start_line = len(self.bs_boxlist[tab]) + 1
+                if tab == '':
+                    start_line -= 2
+
+            if self.bs_update_flag:
+                self.bs_boxlist[tab] = {}
 
 
+            line = 1
             for i, k1 in enumerate(list(self.buy_sell_var.keys())):
-                self.bs_boxlist[i] = []
+
+                if not self.buy_sell_var[k1]['source'] == tab:
+                    continue
+
+                if line < start_line:
+                    line += 1
+                    continue
+
+                self.bs_boxlist[tab][i] = []
                 for j, k2 in enumerate(list(self.buy_sell_var[k1].keys())):
-                    l = Label(self.bs_root, text=self.buy_sell_var[k1][k2])
-                    self.bs_boxlist[i].append(l)
-                    l.grid(row=i + 1, column=j, sticky=E + W, padx=10)
+                    l = Label(self.bs_root[tab], text=self.buy_sell_var[k1][k2])
+                    self.bs_boxlist[tab][i].append(l)
+                    l.grid(row=line, column=j, sticky=E + W, padx=10)
 
                 self.checkbutton_context_list[i] = {}
-                self.checkbutton_context_list[i][0] = IntVar(self.bs_root)
+                self.checkbutton_context_list[i][0] = IntVar(self.bs_root[tab])
                 if self.buy_sell_var[k1]['策略'] == '未知': # 内外部下单
-                    l = Checkbutton(self.bs_root,variable=self.checkbutton_context_list[i][0])
-                    l.grid(row=i + 1, column=j + 1, sticky=E + W, padx=10)
+                    l = Checkbutton(self.bs_root[tab], variable=self.checkbutton_context_list[i][0])
+                    l.grid(row=line, column=j + 1, sticky=E + W, padx=10)
                 else:
                     self.checkbutton_context_list[i][0].set(0)
                     l = None
                 self.checkbutton_context_list[i][1] = l
-                self.bs_boxlist[i].append(l)
+                self.bs_boxlist[tab][i].append(l)
+                line += 1
 
 
-            i = len(self.bs_boxlist)
-            self.bs_boxlist[i] = []
-            stg = StringVar()
-            stgChosen = ttk.Combobox(self.bs_root, width=10, textvariable=stg)
-            stgChosen['values'] = [strategy for strategy in self.strategies]
-            stgChosen.grid(row=i + 1, column=0, padx=5)
-            stgChosen.current(0)
-            self.bs_boxlist[i].append(stgChosen)
+            if tab == '':
+                i = len(self.bs_boxlist[tab])
+                self.bs_boxlist[tab]['line1'] = []
+                stg = StringVar()
+                stgChosen = ttk.Combobox(self.bs_root[tab], width=10, textvariable=stg)
+                stgChosen['values'] = [strategy for strategy in self.strategies]
+                stgChosen.grid(row=i + 1, column=0, padx=5)
+                stgChosen.current(0)
+                self.bs_boxlist[tab]['line1'].append(stgChosen)
 
-            b = Button(self.bs_root, text="全选", command=self.all_select, width=10)
-            b.grid(row=i + 1, column=1, sticky=E, padx=5, pady=10)
-            self.bs_boxlist[i].append(b)
+                b = Button(self.bs_root[tab], text="全选", command=self.all_select, width=10)
+                b.grid(row=i + 1, column=1, sticky=E, padx=5, pady=10)
+                self.bs_boxlist[tab]['line1'].append(b)
 
-            b = Button(self.bs_root, text="全不选", command=self.de_all_select, width=10)
-            b.grid(row=i + 1, column=2, sticky=E, padx=5, pady=10)
-            self.bs_boxlist[i].append(b)
+                b = Button(self.bs_root[tab], text="全不选", command=self.de_all_select, width=10)
+                b.grid(row=i + 1, column=2, sticky=E, padx=5, pady=10)
+                self.bs_boxlist[tab]['line1'].append(b)
 
-            b = Button(self.bs_root, text="更新", command=self.bs_update_thread, width=10)
-            b.grid(row=i + 1, column=3, sticky=E, padx=5, pady=10)
-            self.bs_boxlist[i].append(b)
+                b = Button(self.bs_root[tab], text="更新", command=self.bs_update_thread, width=10)
+                b.grid(row=i + 1, column=3, sticky=E, padx=5, pady=10)
+                self.bs_boxlist[tab]['line1'].append(b)
 
 
-            # 筛选成交回报
-            self.bs_boxlist[i+1] = []
-            sty = StringVar()
-            styChosen = ttk.Combobox(self.bs_root, width=10, textvariable=sty)
-            styChosen['values'] = ['510050', '510300', '159919', 'IO', 'IF', 'IH']
-            styChosen.grid(row=i + 2, column=0, padx=5)
-            styChosen.current(0)
-            self.bs_boxlist[i+1].append(styChosen)
+                # 筛选成交回报
+                self.bs_boxlist[tab]['line2'] = []
+                sty = StringVar()
+                styChosen = ttk.Combobox(self.bs_root[tab], width=10, textvariable=sty)
+                styChosen['values'] = ['510050', '510300', '159919', 'IO', 'IF', 'IH']
+                styChosen.grid(row=i + 2, column=0, padx=5)
+                styChosen.current(0)
+                self.bs_boxlist[tab]['line2'].append(styChosen)
 
-            mat = StringVar()
-            matChosen = ttk.Combobox(self.bs_root, width=10, textvariable=mat)
-            matChosen['values'] = ['']
-            matChosen.grid(row=i + 2, column=1, padx=5)
-            matChosen.current(0)
-            self.bs_boxlist[i+1].append(matChosen)
+                mat = StringVar()
+                matChosen = ttk.Combobox(self.bs_root[tab], width=10, textvariable=mat)
+                matChosen['values'] = ['']
+                matChosen.grid(row=i + 2, column=1, padx=5)
+                matChosen.current(0)
+                self.bs_boxlist[tab]['line2'].append(matChosen)
 
-            def func(*args):
-                Mat = gl.get_value('Mat')
+                def func(*args):
+                    Mat = gl.get_value('Mat')
 
-                if styChosen.get() == '510050':
-                    matlist = list(Mat['contract_format'][StockType.etf50].values())
-                elif styChosen.get() == '510300':
-                    matlist = list(Mat['contract_format'][StockType.h300].values())
-                elif styChosen.get() == '159919':
-                    matlist = list(Mat['contract_format'][StockType.s300].values())
-                elif styChosen.get() == 'IO':
-                    matlist = list(Mat['contract_format'][StockType.gz300].values())
-                elif styChosen.get() == 'IF':
-                    matlist = list(Mat['contract_format'][FutureType.IF].values())
-                elif styChosen.get() == 'IH':
-                    matlist = list(Mat['contract_format'][FutureType.IH].values())
-                else:
-                    matlist = []
+                    if styChosen.get() == '510050':
+                        matlist = list(Mat['contract_format'][StockType.etf50].values())
+                    elif styChosen.get() == '510300':
+                        matlist = list(Mat['contract_format'][StockType.h300].values())
+                    elif styChosen.get() == '159919':
+                        matlist = list(Mat['contract_format'][StockType.s300].values())
+                    elif styChosen.get() == 'IO':
+                        matlist = list(Mat['contract_format'][StockType.gz300].values())
+                    elif styChosen.get() == 'IF':
+                        matlist = list(Mat['contract_format'][FutureType.IF].values())
+                    elif styChosen.get() == 'IH':
+                        matlist = list(Mat['contract_format'][FutureType.IH].values())
+                    else:
+                        matlist = []
 
-                matChosen['values'] = matlist
+                    matChosen['values'] = matlist
 
-            styChosen.bind("<<ComboboxSelected>>", func)
+                styChosen.bind("<<ComboboxSelected>>", func)
 
-            b = Button(self.bs_root, text='筛选', command=self.filter, width=10)
-            b.grid(row=i + 2, column=2, sticky=E, padx=5, pady=10)
-            self.bs_boxlist[i+1].append(b)
+                b = Button(self.bs_root[tab], text='筛选', command=self.filter, width=10)
+                b.grid(row=i + 2, column=2, sticky=E, padx=5, pady=10)
+                self.bs_boxlist[tab]['line2'].append(b)
 
-        self.bs_root.after(5000, self.bs_refresh) # when root destroyed, stops.
+        if self.bs_update_flag:
+            self.bs_update_flag = False
+        self.bs_root[tab].after(3000, self.bs_refresh) # when root destroyed, stops.
 
 
     def check_buy_sell(self, quote):
@@ -846,7 +905,7 @@ class monitor_yield(object):
         else:
             return
 
-        id,reportID,cumqty,leavesqty = quote['OrderID'], quote['ReportID'], int(quote['CumQty']), int(quote['LeavesQty'])
+        id, reportID, cumqty, leavesqty, originalqty, orderqty = quote['OrderID'], quote['ReportID'], int(quote['CumQty']), int(quote['LeavesQty']), int(quote['OriginalQty']), int(quote['OrderQty'])
         contract = quote['Symbol']
         Price = float(quote['AvgPrice'])
         Direction = int(quote['Side'])
@@ -855,8 +914,6 @@ class monitor_yield(object):
         ExecType = quote['ExecType']
         strategy = quote['UserKey1']
         source = quote['UserKey2']
-        OriginalQty = quote['OriginalQty']
-        OrderQty = quote['OrderQty']
 
         order_for_hg = gl.get_value('hg_order')['order']
         order_for_bd = gl.get_value('bd_order')['order']
@@ -868,28 +925,38 @@ class monitor_yield(object):
             outer = False
             self.order_data_txt.write(TradeTime + ' | ' + '(内) ' + source + ' ' + str(quote) + '\n')
 
+        if outer:
+            source = ''
+
 
         if source == 'build':
             if strategy in list(order_for_bd.keys()):
                 if contract in list(order_for_bd[strategy].keys()):
                     # 写入建仓 reportID
                     if ExecType == '0':
-                        order_for_bd[strategy][contract]['reportID'] = reportID
+                        if reportID not in list(order_for_bd[strategy][contract]['rp'].keys()):
+                            current_time = time.time()
+                            order_for_bd[strategy][contract]['rp'][reportID] = {}
+                            order_for_bd[strategy][contract]['rp'][reportID]['ot'] = current_time
+                            order_for_bd[strategy][contract]['rp'][reportID]['num'] = originalqty if Direction == 1 else -1 * originalqty
+                            order_for_bd[strategy][contract]['rp'][reportID]['cancel_order'] = False
+                            order_for_bd[strategy][contract]['rp'][reportID]['canceled'] = False
                     # 删单成功
                     elif ExecType in ['8', '5']:
-                        order_for_bd[strategy][contract]['canceled'] = True
+                        if reportID in list(order_for_bd[strategy][contract]['rp'].keys()):
+                            order_for_bd[strategy][contract]['rp'][reportID]['canceled'] = True
                     # 删单失败
                     elif ExecType == '12':
-                        num = order_for_bd[strategy][contract]['num']
+                        num = order_for_bd[strategy][contract]['rp'][reportID]['num']
                         if not num == 0:
-                            od.order_cancel(order_for_bd[strategy][contract]['reportID'])
+                            od.order_cancel(reportID)
 
         # 补单
         if source == 'hedge':
             if (ExecType in ['5', '8'] and not id in self.addin_order['id']) or (ExecType == '10' and not reportID in self.addin_order['report']):
                 self.order_data_txt.write(TradeTime + ' | ' + '(需要补单的成交回报) ' + str(quote) + '\n')
 
-                num_add = int(OriginalQty) - int(OrderQty)
+                num_add = originalqty - orderqty
                 mp = 1 if Direction == 1 else -1
                 num_add *= mp
 
@@ -923,11 +990,11 @@ class monitor_yield(object):
         if source == 'hedge':
             if ExecType == '5' and id not in self.strategy_trade_return['type5']:
                 if id not in list(self.strategy_trade_return.keys()):
-                    Volume = int(OrderQty)
+                    Volume = cumqty
                 else:
-                    Volume = int(OrderQty) - (int(OriginalQty) - self.strategy_trade_return[id])
+                    Volume = cumqty - (originalqty - self.strategy_trade_return[id])
                 
-                self.strategy_trade_return[id] = int(OriginalQty) - int(OrderQty)
+                self.strategy_trade_return[id] = leavesqty
                 self.strategy_trade_return['type5'].append(id)
                 flag = True
 
@@ -940,16 +1007,15 @@ class monitor_yield(object):
             self.order_data_txt.write(TradeTime + ' | ' + '(更新会使用的成交回报) ' + str(quote) + '\n')
 
             self.buy_sell_var[len(self.buy_sell_var) + 1] = {}
-            self.buy_sell_var[len(self.buy_sell_var)]['交易时间'] = TradeTime
+            l = len(self.buy_sell_var)
+            self.buy_sell_var[l]['交易时间'] = TradeTime
             t = [{1: '买', 2: '卖'}]
-            self.buy_sell_var[len(self.buy_sell_var)]['成交类型'] = t[0][Direction]
-            self.buy_sell_var[len(self.buy_sell_var)]['数量'] = Volume
-            self.buy_sell_var[len(self.buy_sell_var)]['价格'] = '%f'%Price
-            self.buy_sell_var[len(self.buy_sell_var)]['合约'] = contract
-            if outer: # 内外部下单
-                self.buy_sell_var[len(self.buy_sell_var)]['策略'] = '未知'
-            else:
-                self.buy_sell_var[len(self.buy_sell_var)]['策略'] = strategy
+            self.buy_sell_var[l]['成交类型'] = t[0][Direction]
+            self.buy_sell_var[l]['数量'] = Volume
+            self.buy_sell_var[l]['价格'] = '%f'%Price
+            self.buy_sell_var[l]['合约'] = contract
+            self.buy_sell_var[l]['策略'] = '未知' if outer else strategy
+            self.buy_sell_var[l]['source'] = source
 
 
             # 内部下单，更新到盈利界面
@@ -1000,8 +1066,10 @@ class monitor_yield(object):
                 # 判断 自对冲下单 是否完成
                 if source == 'hedge':
                     if strategy in list(order_for_hg.keys()):
-                        if contract in list(order_for_hg[strategy].keys()) and OriginalQty == OrderQty and leavesqty == 0:
-                            order_for_hg[strategy].pop(contract)
+                        if contract in list(order_for_hg[strategy].keys()):
+                            order_for_hg[strategy][contract] -= Volume if Direction == 1 else -1 * Volume
+                            if order_for_hg[strategy][contract] == 0:
+                                order_for_hg[strategy].pop(contract)
                         if order_for_hg[strategy] == {}:
                             order_for_hg.pop(strategy)
 
@@ -1009,7 +1077,8 @@ class monitor_yield(object):
                 if source == 'build':
                     if strategy in list(order_for_bd.keys()):
                         if contract in list(order_for_bd[strategy].keys()):
-                            order_for_bd[strategy][contract]['num'] = leavesqty if Direction == 1 else -1 * leavesqty
+                            order_for_bd[strategy][contract]['num'] -= Volume if Direction == 1 else -1 * Volume
+                            order_for_bd[strategy][contract]['rp'][reportID]['num'] = leavesqty if Direction == 1 else -1 * leavesqty
 
             self.bs_refresh_signal.append(1)
             break
@@ -1031,15 +1100,15 @@ class monitor_yield(object):
 
     def filter(self):
 
-        str_sty = self.bs_boxlist[len(self.bs_boxlist)-1][0].get()
-        str_mat = self.bs_boxlist[len(self.bs_boxlist)-1][1].get()
+        str_sty = self.bs_boxlist['']['line2'][0].get()
+        str_mat = self.bs_boxlist['']['line2'][1].get()
 
         if '' in [str_sty, str_mat]:
             return
 
         for k in list(self.checkbutton_context_list.keys()):
             if not self.checkbutton_context_list[k][1] == None: # 内外部下单
-                contract = self.bs_boxlist[k][4].cget('text')
+                contract = self.bs_boxlist[''][k][4].cget('text')
                 if str_sty in contract and str_mat in contract:
                     self.checkbutton_context_list[k][1].select()
 
@@ -1058,17 +1127,20 @@ class monitor_yield(object):
         if login_out != 'yes':
             return
 
-        strategy = self.bs_boxlist[len(self.bs_boxlist)-2][0].get()
+        strategy = self.bs_boxlist['']['line1'][0].get()
         
         if strategy == '':
             return
 
         # 更新后5s停更最大盈亏
-        self.stop_update_max_profit[strategy] = time.time()
+        self.after_update[strategy] = time.time()
 
         ks = []
 
         for i, k1 in enumerate(list(self.buy_sell_var.keys())):
+
+            if i not in list(self.checkbutton_context_list.keys()):
+                continue
 
             if self.checkbutton_context_list[i][0].get() == 0:
                 continue
@@ -1121,16 +1193,14 @@ class monitor_yield(object):
 
         for k in ks:
             self.buy_sell_var.pop(k)
-            self.checkbutton_context_list.pop(k-1)
         nums = [i+1 for i in range(len(self.buy_sell_var))]
         temp = {}
-        temp_c = {}
-        for i,k in zip(nums, self.buy_sell_var.keys()):
+        for i, k in zip(nums, self.buy_sell_var.keys()):
             temp[i]=self.buy_sell_var[k]
-            temp_c[i - 1] = self.checkbutton_context_list[k - 1]
         self.buy_sell_var = temp
-        self.checkbutton_context_list = temp_c
+        self.checkbutton_context_list = {}
 
+        self.bs_update_flag = True
         self.bs_refresh_signal.append(1)
 
 
