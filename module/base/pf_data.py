@@ -211,7 +211,7 @@ class OptData: # one stock type
         x = [opt1[0].K, opt2[0].K, opt3[0].K]
         y = [(opt1[0].iv() + opt1[1].iv()) / 2, (opt2[0].iv() + opt2[1].iv()) / 2, (opt3[0].iv() + opt3[1].iv()) / 2]
         cs = CubicSpline(x, y)
-        return cs(self.S[mat])
+        return {'vix': cs(self.S[mat]), 'cb': opt1[0].cb or opt1[1].cb or opt2[0].cb or opt2[1].cb or opt3[0].cb or opt3[1].cb}
 
 
 class FutureData:

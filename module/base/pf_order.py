@@ -15,8 +15,20 @@ def order_api(target: str, price: str, num: int, strategy: str, source: str):
     else:
         return
 
+    if target[:10] in ['TC.F.CFFEX', 'TC.O.CFFEX']:
+        mkt = 'cffex'
+    elif target[:8] == 'TC.O.SSE':
+        mkt = 'sse'
+    elif target[:9] == 'TC.O.SZSE':
+        mkt = 'szse'
+    else:
+        return
+
+    ot = '2'
     if source == 'hedge':
         tif = '2'
+        if mkt in ['sse', 'szse']:
+            ot = '1'
     elif source == 'build':
         tif = '1'
     else:
@@ -29,9 +41,9 @@ def order_api(target: str, price: str, num: int, strategy: str, source: str):
     account_used = None
     if not account['sim'] == None:
         account_used = account['sim']
-    elif target[:10] in ['TC.F.CFFEX', 'TC.O.CFFEX']:
+    elif mkt == 'cffex':
         account_used = account['index']
-    elif target[:8] == 'TC.O.SSE' or targer[:9] == 'TC.O.SZSE':
+    elif mkt in ['sse', 'szse']:
         account_used = account['stock']
 
     if account_used == None:
@@ -44,15 +56,26 @@ def order_api(target: str, price: str, num: int, strategy: str, source: str):
     'Symbol':target,
     'Side':side,
     'Price':Price,
-    'TimeInForce':tif,# 'ROD Day order' | 'IOC | FAK'
-    'OrderType':'2',
+    'TimeInForce':tif,# 1 : ROD Day order | 2 : IOC | FAK | 3 : FOK   Fill or Kill
+    'OrderType':ot,# 1 : Market order | 2 : Limit order
     'OrderQty':str(abs(num)),
     'PositionEffect':'4',
     'UserKey1': strategy,
     'UserKey2': source,
 
     }
-    g_TradeZMQ.new_order(g_TradeSession,Param)
+
+    if mkt in ['sse', 'szse']:
+        per = 50 if ot == '2' else 10
+    elif mkt == 'cffex':
+        per = 20
+
+    total_num = abs(num)
+    while total_num > 0:
+        n = per if total_num >= per else total_num
+        Param['OrderQty'] = str(n)
+        g_TradeZMQ.new_order(g_TradeSession,Param)
+        total_num -= n
 
 
 def order_cancel(reportID: str):
