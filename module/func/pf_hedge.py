@@ -17,6 +17,7 @@ class hedge:
         self.index = index
         self.p_update_list = []
         self.p_update_flag = True
+        self.far_from_bs_update = True
         self.change_list = {StockType.etf50: [StockType.etf50, StockType.h300, StockType.s300, StockType.gz300], StockType.h300: [StockType.h300, StockType.s300, StockType.gz300], StockType.s300: [StockType.s300, StockType.h300, StockType.gz300], StockType.gz300: [StockType.gz300]}
 
         # 记录
@@ -254,6 +255,9 @@ class hedge:
             return
 
         if not self.p_update_flag:
+            return
+
+        if not self.far_from_bs_update:
             return
 
         stg_greeks = gl.get_value('stg_greeks')
