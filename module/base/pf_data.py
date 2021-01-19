@@ -109,7 +109,6 @@ class OptData: # one stock type
         self.T = {}
         self.initT = {}
         self.S = {}
-        self.k0 = {}
         self.posi = {}
         self.OptionList = {}
         if sty == StockType.gz300:
@@ -125,8 +124,9 @@ class OptData: # one stock type
             self.tick_limit = 10
             self.matlist = [Maturity.M1, Maturity.M2, Maturity.Q1, Maturity.Q2]
         for mat in self.matlist:
-            self.S[mat] = ''; self.k0[mat] = ''; self.posi[mat] = ''
+            self.S[mat] = ''; self.posi[mat] = {'atm': '', 'c_x1': '', 'p_x1': ''}
         self.k_list = {}
+        self.k_list_without_A = {}
         self.getMat()
 
     def getMat(self):
@@ -171,18 +171,12 @@ class OptData: # one stock type
             elif self.sty == StockType.s300 and id[10:16] == '159919' and self.Mat_to_2005[mat] in [id[19:23], id[20:24]]:
                 QuoteID_addin.append(id)
 
-        self.OptionList[mat] = []
-        QuoteID_addin_C_K = []
-        for id in QuoteID_addin:
-            if '.C.' in id:
-                QuoteID_addin_C_K.append(float(id[gl.last_C_P(id):]))
-        QuoteID_addin_C_K.sort()
-        for k in QuoteID_addin_C_K:
-            self.OptionList[mat].append([OptionInfo(self.sty, mat, OptionType.C, k, '', '', ''), OptionInfo(self.sty, mat, OptionType.P, k, '', '', '')])
+        self.k_list[mat] = sorted([float(id[gl.last_C_P(id):]) for id in QuoteID_addin if '.C.' in id])
+        self.k_list_without_A[mat] = sorted([float(id[gl.last_C_P(id):]) for id in QuoteID_addin if '.C.' in id and 'A' not in id])
 
-        self.k_list[mat] = QuoteID_addin_C_K
+        self.OptionList[mat] = [[OptionInfo(self.sty, mat, OptionType.C, k, '', '', ''), OptionInfo(self.sty, mat, OptionType.P, k, '', '', '')] for k in self.k_list[mat]]
 
-    def S_k0_posi(self, mat: Maturity): # update
+    def S_posi(self, mat: Maturity): # update
         optlist = self.OptionList[mat]
         n = len(optlist)
         future = [optlist[i][0].midbidaskspread() - optlist[i][1].midbidaskspread() + optlist[i][0].K for i in range(n) if None not in [optlist[i][0].midbidaskspread(), optlist[i][1].midbidaskspread()] and 'A' not in optlist[i][0].yc_master_contract]
@@ -191,11 +185,13 @@ class OptData: # one stock type
             return
         avg = np.mean(future[1:-1])
         self.S[mat] = avg
-        self.posi[mat] = np.argmin(abs(np.array(self.k_list[mat]) - avg))
-        self.k0[mat] = optlist[self.posi[mat]][0].K
+        k_atm_posi = np.argmin(abs(np.array(self.k_list_without_A[mat]) - avg))
+        self.posi[mat]['atm'] = self.k_list[mat].index(self.k_list_without_A[mat][k_atm_posi])
+        self.posi[mat]['c_x1'] = self.k_list[mat].index(self.k_list_without_A[mat][min(k_atm_posi + 1, len(self.k_list_without_A[mat]) - 1)])
+        self.posi[mat]['p_x1'] = self.k_list[mat].index(self.k_list_without_A[mat][max(k_atm_posi - 1, 0)])
 
     def vix(self, mat: Maturity): # 计算vix
-        k_list_copy = self.k_list[mat].copy()
+        k_list_copy = self.k_list_without_A[mat].copy()
         k1 = k_list_copy[np.argmin(abs(np.array(k_list_copy) - self.S[mat]))]
         k_list_copy.remove(k1)
         k2 = k_list_copy[np.argmin(abs(np.array(k_list_copy) - self.S[mat]))]
