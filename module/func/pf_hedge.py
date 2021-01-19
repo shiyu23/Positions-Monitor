@@ -392,13 +392,13 @@ class hedge:
                         if br:
                             break
 
-                        mat_atm = data_opt[hedge_sty].OptionList[hedge_mat][data_opt[hedge_sty].posi[hedge_mat]]
-                        mat_x1 = [data_opt[hedge_sty].OptionList[hedge_mat][min(data_opt[hedge_sty].posi[hedge_mat] + 1, len(data_opt[hedge_sty].k_list[hedge_mat]) - 1)][0], data_opt[hedge_sty].OptionList[hedge_mat][max(data_opt[hedge_sty].posi[hedge_mat] - 1, 0)][1]]
+                        mat_atm = data_opt[hedge_sty].OptionList[hedge_mat][data_opt[hedge_sty].posi[hedge_mat]['atm']]
+                        mat_x1 = [data_opt[hedge_sty].OptionList[hedge_mat][data_opt[hedge_sty].posi[hedge_mat]['c_x1']][0], data_opt[hedge_sty].OptionList[hedge_mat][data_opt[hedge_sty].posi[hedge_mat]['p_x1']][1]]
                         try_k_list = [mat_atm, [mat_atm[0], mat_x1[1]], [mat_atm[1], mat_x1[0]], mat_x1]
 
                         for hedge_k in try_k_list:
                             # 未熔断 and 流动性好
-                            if [True, True] == [True for i in range(2) if hedge_k[i].cb == False and '' not in [hedge_k[i].ask, hedge_k[i].bid] and 'A' not in hedge_k[i].yc_master_contract and hedge_k[i].ask - hedge_k[i].bid < data_opt[hedge_sty].mc * data_opt[hedge_sty].tick_limit and hedge_k[i].P > data_opt[hedge_sty].p_limit]:
+                            if [True, True] == [True for i in range(2) if hedge_k[i].cb == False and '' not in [hedge_k[i].ask, hedge_k[i].bid] and hedge_k[i].ask - hedge_k[i].bid < data_opt[hedge_sty].mc * data_opt[hedge_sty].tick_limit and hedge_k[i].P > data_opt[hedge_sty].p_limit]:
                                 hedge_k[0]._iv = hedge_k[0].iv()
                                 hedge_k[1]._iv = hedge_k[1].iv()
                                 greeks_c = data_opt[hedge_sty].S[hedge_mat] * data_opt[hedge_sty].cm * hedge_k[0].delta() / 10000
