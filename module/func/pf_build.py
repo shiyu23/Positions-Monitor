@@ -1,7 +1,6 @@
 from tkinter import *
 from tkinter import ttk
 import threading
-import math
 import time
 
 from module.base.pf_enum import *
@@ -14,7 +13,9 @@ class build:
     def __init__(self, index: int):
 
         self.index = index
-        self.vega = {'long': 0, 'short': 0}
+        self.cb_in_grp = False
+        self.cb_msg_sent = False
+        self.vega = {}
 
         # 记录
         localtime = gl.get_value('localtime')
@@ -62,18 +63,17 @@ class build:
         lb_ty.grid(row=1, column=1)
         ty = StringVar()
         tyChosen = ttk.Combobox(self.root, width=10, textvariable=ty)
-        tyChosen['values'] = ['300'] #, '350']
+        tyChosen['values'] = ['300', '350']
         tyChosen.grid(column=1, row=2, padx=5)
         tyChosen.current(0)
         self.boxlist[0].append(tyChosen)
 
         def func(*args):
             ty_name = tyChosen.get()
-            strategies = []
-            for i in all_strategies:
-                if ty_name in i:
-                    strategies.append(i)
-            stgChosen['values'] = strategies
+            fore_ty = StockType.gz300 if ty_name == '300' else StockType.h300
+            Mat = gl.get_value('Mat')
+            matChosen['values'] = list(Mat['contract_format'][fore_ty].values())[:3] if Mat['contract_format'][StockType.gz300][Maturity.M3] == Mat['contract_format'][StockType.h300][Maturity.Q1] else list(Mat['contract_format'][fore_ty].values())[:2]
+            stgChosen['values'] = [i for i in all_strategies if ty_name in i]
 
         tyChosen.bind("<<ComboboxSelected>>", func)
 
@@ -81,11 +81,7 @@ class build:
         lb_mat.grid(row=1, column=2)
         mat = StringVar()
         matChosen = ttk.Combobox(self.root, width=10, textvariable=mat)
-        Mat = gl.get_value('Mat')
-        if Mat['contract_format'][StockType.gz300][Maturity.M3] == Mat['contract_format'][StockType.h300][Maturity.Q1]:
-            matChosen['values'] = list(Mat['contract_format'][StockType.gz300].values())[:3]
-        else:
-            matChosen['values'] = list(Mat['contract_format'][StockType.gz300].values())[:2]
+        matChosen['values'] = ['']
         matChosen.grid(column=2, row=2, padx=5)
         matChosen.current(0)
         self.boxlist[0].append(matChosen)
@@ -94,7 +90,7 @@ class build:
         lb_stg.grid(row=1, column=3)
         stg = StringVar()
         stgChosen = ttk.Combobox(self.root, width=10, textvariable=stg)
-        stgChosen['values'] = [i for i in all_strategies if '300' in i]
+        stgChosen['values'] = ['']
         stgChosen.grid(column=3, row=2, padx=5)
         stgChosen.current(0)
         self.boxlist[0].append(stgChosen)
@@ -167,7 +163,6 @@ class build:
 
     def build(self):
 
-        build_ty = self.boxlist[0][0].get()
         build_mat = self.boxlist[0][1].get()
         build_strategy = self.boxlist[0][2].get()
 
@@ -179,6 +174,9 @@ class build:
             fore = abs(int(self.boxlist[3][1].get()))
 
         except:
+            return
+
+        if build_mat == '':
             return
 
         if build_strategy == '':
@@ -203,55 +201,97 @@ class build:
         if build_strategy in list(order.keys()):
 
             # 判断上轮下单是否成交完成
-            if [order[build_strategy][target]['num'] for target in list(order[build_strategy].keys())] == [0] * len(order[build_strategy]):
+            if [order[build_strategy][target]['leavesqty'] for target in list(order[build_strategy].keys())] == [0] * len(order[build_strategy]):
                 order.pop(build_strategy)
                 return
 
-            # 判断是否需要追中价
+            # 未成交单处理
             current_time = time.time()
             target_list = list(order[build_strategy].keys())
+
+            if True in [gl.name_to_data(target).cb for target in list(order[build_strategy].keys())]:
+                self.cb_in_grp = True
+                if not self.cb_msg_sent:
+                    self.cb_msg_sent = True
+                    def msg():
+                        messagebox.showinfo(title='熔断提示', message='建仓合约熔断了，请交易员操作')
+                    t = threading.Thread(target = msg,args=())
+                    t.start()
+
             for i, target in enumerate(target_list):
-                for rp in list(order[build_strategy][target]['rp'].keys()):
-                    num = order[build_strategy][target]['rp'][rp]['num']
 
-                    if not num == 0 and current_time - order[build_strategy][target]['rp'][rp]['ot'] > 3:
+                if gl.name_to_data(target).cb:
+                    order[build_strategy][target]['status'] = 'cb'
 
-                        if not order[build_strategy][target]['rp'][rp]['cancel_order']:
+                # 合约未熔断（正常建仓）
+                if not self.cb_in_grp:
+
+                    for rp in list(order[build_strategy][target]['rp'].keys()):
+                        num = order[build_strategy][target]['rp'][rp]['leavesqty']
+
+                        if not num == 0 and current_time - order[build_strategy][target]['rp'][rp]['ot'] > 3:
+
+                            if not order[build_strategy][target]['rp'][rp]['cancel_order']:
+                                od.order_cancel(rp)
+                                order[build_strategy][target]['rp'][rp]['cancel_order'] = True
+
+                            if order[build_strategy][target]['rp'][rp]['canceled']:
+
+                                if '.C.' in target:
+                                    couple_target = [t for t in target_list if '.C.' in t]
+                                elif '.P.' in target:
+                                    couple_target = [t for t in target_list if '.P.' in t]
+
+                                if 0 in [order[build_strategy][ct]['leavesqty'] for ct in couple_target]:
+                                    od.order_api(target, 'HIT', num, build_strategy, 'build')
+                                else:
+                                    od.order_api(target, 'MID', num, build_strategy, 'build')
+                                order[build_strategy][target]['rp'].pop(rp)
+
+                # 合约熔断（撤单，出提示）
+                else:
+
+                    for rp in list(order[build_strategy][target]['rp'].keys()):
+                        num = order[build_strategy][target]['rp'][rp]['leavesqty']
+
+                        if not num == 0 and not order[build_strategy][target]['rp'][rp]['cancel_order']:
                             od.order_cancel(rp)
                             order[build_strategy][target]['rp'][rp]['cancel_order'] = True
 
-                        if order[build_strategy][target]['rp'][rp]['canceled']:
-
-                            if '.C.' in target:
-                                couple_target = [t for t in target_list if '.C.' in t]
-                            elif '.P.' in target:
-                                couple_target = [t for t in target_list if '.P.' in t]
-
-                            if 0 in [order[build_strategy][ct]['num'] for ct in couple_target]:
-                                od.order_api(target, 'HIT', num, build_strategy, 'build')
-                            else:
-                                od.order_api(target, 'MID', num, build_strategy, 'build')
+                        if num == 0 or order[build_strategy][target]['rp'][rp]['canceled']:
                             order[build_strategy][target]['rp'].pop(rp)
+
+                        if len(order[build_strategy][target]['rp']) == 0:
+                            order[build_strategy][target]['leavesqty'] = 0
 
             return
 
         order[build_strategy] = {}
+        if build_strategy not in self.vega.keys():
+            self.vega[build_strategy] = {'long': 0, 'short': 0}
 
 
         self.data_txt.write(time.strftime('%H:%M:%S', localtime) + ' | ' + '建仓判断前......' + '\n' + 'order for build：' + str(order) + '\n')
 
 
+        if '300' in build_strategy:
+            fore_ty = StockType.gz300
+            hind_ty = StockType.h300
+        elif '350' in build_strategy:
+            fore_ty = StockType.h300
+            hind_ty = StockType.etf50
+
         data_opt = gl.get_value('data_opt')
-        mat_gz300 = data_opt[StockType.gz300]._2005_to_Mat[build_mat]
-        mat_h300 = data_opt[StockType.h300]._2005_to_Mat[build_mat]
-        vix_dict_gz300 = data_opt[StockType.gz300].vix(mat_gz300)
-        vix_dict_h300 = data_opt[StockType.h300].vix(mat_h300)
+        mat_fore = data_opt[fore_ty]._2005_to_Mat[build_mat]
+        mat_hind = data_opt[hind_ty]._2005_to_Mat[build_mat]
+        vix_dict_fore = data_opt[fore_ty].vix(mat_fore)
+        vix_dict_hind = data_opt[hind_ty].vix(mat_hind)
 
         direction = None
-        if build_ty == '300' and vix_dict_h300['cb'] == False:
-            if vix_dict_gz300['vix'] - vix_dict_h300['vix'] >= build_upper:
+        if vix_dict_fore['cb'] == False and vix_dict_hind['cb'] == False:
+            if vix_dict_fore['vix'] - vix_dict_hind['vix'] >= build_upper:
                 direction = -1
-            elif vix_dict_gz300['vix'] - vix_dict_h300['vix'] <= build_lower:
+            elif vix_dict_fore['vix'] - vix_dict_hind['vix'] <= build_lower:
                 direction = 1
             else:
                 order.pop(build_strategy)
@@ -260,57 +300,72 @@ class build:
             order.pop(build_strategy)
             return
 
-        gz300 = data_opt[StockType.gz300].OptionList[mat_gz300][data_opt[StockType.gz300].posi[mat_gz300]]
-        h300 = data_opt[StockType.h300].OptionList[mat_h300][data_opt[StockType.h300].posi[mat_h300]]
+        opt_fore = data_opt[fore_ty].OptionList[mat_fore][data_opt[fore_ty].posi[mat_fore]['atm']]
+        opt_hind = data_opt[hind_ty].OptionList[mat_hind][data_opt[hind_ty].posi[mat_hind]['atm']]
 
-        if '' in [gz300[0].yc_master_contract, gz300[1].yc_master_contract, h300[0].yc_master_contract, h300[1].yc_master_contract]:
+        if '' in [opt_fore[0].yc_master_contract, opt_fore[1].yc_master_contract, opt_hind[0].yc_master_contract, opt_hind[1].yc_master_contract]:
             order.pop(build_strategy)
             return
 
-        if direction == 1 and self.vega['long'] > target_vega:
+        if direction == 1 and self.vega[build_strategy]['long'] > target_vega:
             order.pop(build_strategy)
             return
 
-        if direction == -1 and self.vega['short'] < -1 * target_vega:
+        if direction == -1 and self.vega[build_strategy]['short'] < -1 * target_vega:
             order.pop(build_strategy)
             return
+
+        fore *= direction
+
+        # 前跨合成期货 调 前跨delta中性
+        fore_delta = fore * data_opt[fore_ty].S[mat_fore] * data_opt[fore_ty].cm * (opt_fore[0].delta() + opt_fore[1].delta()) / 10000
+        fore_synfut_delta = data_opt[fore_ty].S[mat_fore] * data_opt[fore_ty].cm * (opt_fore[0].delta() - opt_fore[1].delta()) / 10000
+        fore_num_synfut = round(fore_delta / fore_synfut_delta, 0)
 
         # vega中性
-        gz300_straddle_vega = direction * 100 * (gz300[0].vega() + gz300[1].vega()) * 0.01
-        h300_straddle_vega = direction * 10000 * (h300[0].vega() + h300[1].vega()) * 0.01
-        hind = round(fore * gz300_straddle_vega / h300_straddle_vega, 0)
+        fore_straddle_vega = data_opt[fore_ty].cm * (opt_fore[0].vega() * (fore - fore_num_synfut) + opt_fore[1].vega() * (fore + fore_num_synfut)) * 0.01
+        hind_straddle_vega_per_synfut = data_opt[hind_ty].cm * (opt_hind[0].vega() + opt_hind[1].vega()) * 0.01
+        hind = -1 * round(fore_straddle_vega / hind_straddle_vega_per_synfut, 0)
 
-        # 后跨合成期货 调 整体中性
-        gz300_straddle_delta = fore * direction * data_opt[StockType.gz300].S[mat_gz300] * 100 * (gz300[0].delta() + gz300[1].delta()) / 10000
-        h300_straddle_delta = -1 * hind * direction * data_opt[StockType.h300].S[mat_h300] * 10000 * (h300[0].delta() + h300[1].delta()) / 10000
-        delta_per_grp = gz300_straddle_delta + h300_straddle_delta
-        h300_synfut_delta = data_opt[StockType.h300].S[mat_h300] * 10000 * (h300[0].delta() - h300[1].delta()) / 10000
-        num_h300_synfut = round(delta_per_grp / h300_synfut_delta, 0)
+        # 后跨合成期货 调 整体delta中性
+        fore_straddle_delta = fore_delta - fore_num_synfut * fore_synfut_delta
+        hind_straddle_delta = hind * data_opt[hind_ty].S[mat_hind] * data_opt[hind_ty].cm * (opt_hind[0].delta() + opt_hind[1].delta()) / 10000
+        delta_per_grp = fore_straddle_delta + hind_straddle_delta
+        hind_synfut_delta = data_opt[hind_ty].S[mat_hind] * data_opt[hind_ty].cm * (opt_hind[0].delta() - opt_hind[1].delta()) / 10000
+        hind_num_synfut = round(delta_per_grp / hind_synfut_delta, 0)
 
-        # 打单边 调 单品种中性
+        # 打单边 调 单品种delta中性
         stg_greeks = gl.get_value('stg_greeks')
-        order[build_strategy] = {gz300[0].yc_master_contract: {'num': fore * direction}, h300[0].yc_master_contract: {'num': -1 * hind * direction - num_h300_synfut}, gz300[1].yc_master_contract: {'num': fore * direction}, h300[1].yc_master_contract: {'num': -1 * hind * direction + num_h300_synfut}}
-        gz300_vega = fore * gz300_straddle_vega
+        order[build_strategy] = {opt_fore[0].yc_master_contract: {'originalqty': fore - fore_num_synfut}, opt_hind[0].yc_master_contract: {'originalqty': hind - hind_num_synfut}, opt_fore[1].yc_master_contract: {'originalqty': fore + fore_num_synfut}, opt_hind[1].yc_master_contract: {'originalqty': hind + hind_num_synfut}}
+        fore_vega = fore_straddle_vega
         if build_strategy in stg_greeks.keys():
-            gz300_greeks = sum(stg_greeks[build_strategy]['delta$(万)'][StockType.gz300].values())
-            gz300_delta_C = fore * direction * data_opt[StockType.gz300].S[mat_gz300] * 100 * gz300[0].delta() / 10000
-            gz300_delta_P = fore * direction * data_opt[StockType.gz300].S[mat_gz300] * 100 * gz300[1].delta() / 10000
-            if (gz300_greeks < 0 and gz300_delta_C > 0 and gz300_greeks < -1 * gz300_delta_C) or (gz300_greeks > 0 and gz300_delta_C < 0 and gz300_greeks > -1 * gz300_delta_C):
-                order[build_strategy] = {gz300[0].yc_master_contract: {'num': fore * direction}, h300[0].yc_master_contract: {'num': -1 * hind * direction}}
-                gz300_vega = fore * direction * gz300[0].vega() * 100 * 0.01
-            elif (gz300_greeks < 0 and gz300_delta_P > 0 and gz300_greeks < -1 * gz300_delta_P) or (gz300_greeks > 0 and gz300_delta_P < 0 and gz300_greeks > -1 * gz300_delta_P):
-                order[build_strategy] = {gz300[1].yc_master_contract: {'num': fore * direction}, h300[1].yc_master_contract: {'num': -1 * hind * direction}}
-                gz300_vega = fore * direction * gz300[1].vega() * 100 * 0.01
+            fore_greeks = sum(stg_greeks[build_strategy]['delta$(万)'][fore_ty].values())
+            fore_delta_C = fore * data_opt[fore_ty].S[mat_fore] * data_opt[fore_ty].cm * opt_fore[0].delta() / 10000
+            fore_delta_P = fore * data_opt[fore_ty].S[mat_fore] * data_opt[fore_ty].cm * opt_fore[1].delta() / 10000
+            if (fore_greeks < 0 and fore_delta_C > 0 and fore_greeks < -1 * fore_delta_C) or (fore_greeks > 0 and fore_delta_C < 0 and fore_greeks > -1 * fore_delta_C):
+                order[build_strategy] = {opt_fore[0].yc_master_contract: {'originalqty': fore}, opt_hind[0].yc_master_contract: {'originalqty': hind}}
+                fore_vega = fore * opt_fore[0].vega() * data_opt[fore_ty].cm * 0.01
+            elif (fore_greeks < 0 and fore_delta_P > 0 and fore_greeks < -1 * fore_delta_P) or (fore_greeks > 0 and fore_delta_P < 0 and fore_greeks > -1 * fore_delta_P):
+                order[build_strategy] = {opt_fore[1].yc_master_contract: {'originalqty': fore}, opt_hind[1].yc_master_contract: {'originalqty': hind}}
+                fore_vega = fore * opt_fore[1].vega() * data_opt[fore_ty].cm * 0.01
 
         d = 'long' if direction == 1 else 'short'
-        self.vega[d] += gz300_vega
+        self.vega[build_strategy][d] += fore_vega
 
 
         self.data_txt.write(time.strftime('%H:%M:%S', localtime) + ' | ' + '建仓判断后......' + '\n' + 'order for build：' + build_strategy + str(order[build_strategy]) + '\n')
         self.data_txt.flush()
 
         # 下单
+        if True in [gl.name_to_data(target).cb for target in list(order[build_strategy].keys())]:
+            order.pop(build_strategy)
+            return
+
         for target in list(order[build_strategy].keys()):
-            num = order[build_strategy][target]['num']
-            od.order_api(target, 'MID', num, build_strategy, 'build')
+            num = order[build_strategy][target]['originalqty']
+            order[build_strategy][target]['leavesqty'] = num
+            order[build_strategy][target]['status'] = 'normal'
             order[build_strategy][target]['rp'] = {}
+            self.cb_in_grp = False
+            self.cb_msg_sent = False
+            od.order_api(target, 'MID', num, build_strategy, 'build')
