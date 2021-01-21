@@ -27,6 +27,7 @@ class monitor_yield(object):
         self.strategy2totalvega = {}
         self.strategy2totaltheta = {}
         self.max_total_profit = {}
+        self.min_total_profit = {}
 
         self.label_var = {}
         self.add_new_signal = [1]
@@ -41,9 +42,9 @@ class monitor_yield(object):
         self.checkbutton_context_list = {}
 
         self.strategy_trade_return = {'all_data':[], 'type5': []}
-        self.colors = ['#FFA500','#87CEFA','#778899', '#DB7093', '#FF1493',
-                       '#7FFFAA','#F0E68C','#FF7F50','#C0C0C0','#BA55D3',
-                       '#FF4500']
+        self.colors = ['#FFA500', '#87CEFA', '#EEA2AD', '#778899', '#DB7093',
+                       '#7FFFAA', '#F0E68C', '#FF7F50', '#C0C0C0', '#BA55D3',
+                       '#FF6A6A']
 
         self.bs_update_flag = True
         self.after_update = {}
@@ -91,7 +92,7 @@ class monitor_yield(object):
         root.config(menu=menubar)
 
         self.p_root = root
-        names = ['策略', '合约', '持仓数', '均价', '留仓损益', '平仓损益', '中价损益', '总收益', '当日最大总收益', '总Delta$(万)', '总Gamma$(万)', '总Vega$', '总Theta$', '买卖中价', '当前价格', 'delta$(万)', 'gamma$(万)', 'vega$', 'theta$']
+        names = ['策略', '合约', '持仓数', '均价', '留仓损益', '平仓损益', '中价损益', '总收益', '当日最大总收益', '当日最小总收益', '总Delta$(万)', '总Gamma$(万)', '总Vega$', '总Theta$', '买卖中价', '当前价格', 'delta$(万)', 'gamma$(万)', 'vega$', 'theta$']
         self.p_names = names
         for i,name in enumerate(names):
             Label(root, text=name, font = font.Font(family='Arial', size=10, weight=font.BOLD)).grid(row=0, column=i, sticky=E + W, pady=1)
@@ -171,9 +172,13 @@ class monitor_yield(object):
 
             if values[0] not in list(self.label_var.keys()):
                 self.label_var[values[0]] = {}
-                for init in [self.strategy2totalprofit, self.strategy2totaldelta, self.strategy2totalgamma, self.strategy2totalvega, self.strategy2totaltheta, self.max_total_profit]:
+                for init in [self.strategy2totalprofit, self.strategy2totaldelta, self.strategy2totalgamma, self.strategy2totalvega, self.strategy2totaltheta]:
                     init[values[0]] = StringVar(self.p_root)
-                    init[values[0]].set('-inf') 
+                    init[values[0]].set('0')
+                self.max_total_profit[values[0]] = StringVar(self.p_root)
+                self.max_total_profit[values[0]].set('-inf')
+                self.min_total_profit[values[0]] = StringVar(self.p_root)
+                self.min_total_profit[values[0]].set('inf')
 
             self.label_var[values[0]][values[1]] = {}
             for j, name in enumerate(self.p_names):
@@ -182,6 +187,8 @@ class monitor_yield(object):
                     self.label_var[values[0]][values[1]][name].set(values[j])
                 else:
                     self.label_var[values[0]][values[1]][name].set('{:g}'.format(0))
+
+            self.after_update[values[0]] = time.time()
 
         # read Ft_for_hg
         Ft_for_hg = gl.get_value('hg_order')['Ft']
@@ -363,19 +370,20 @@ class monitor_yield(object):
             total_vega_position = self.p_names.index('总Vega$')
             total_theta_position = self.p_names.index('总Theta$')
             max_total_profit_position = self.p_names.index('当日最大总收益')
+            min_total_profit_position = self.p_names.index('当日最小总收益')
             total_profit_row = 1
 
             try:
 
                 for p, strategy in enumerate(list(self.label_var.keys())):
 
-                    color = self.colors[p]
+                    color = self.colors[p % len(self.colors)]
                     self.strategy_contain_contract_num[strategy] = len(self.label_var[strategy])
 
                     # 盈利界面合约显示顺序
                     for contract in sorted(self.label_var[strategy].keys()):
                         for j, name in enumerate(self.p_names):
-                            if name not in ['策略', '总收益', '总Delta$(万)', '总Gamma$(万)', '总Vega$', '总Theta$', '当日最大总收益']:
+                            if name not in ['策略', '总收益', '总Delta$(万)', '总Gamma$(万)', '总Vega$', '总Theta$', '当日最大总收益', '当日最小总收益']:
                                 l = Label(self.p_root, text='', textvariable=self.label_var[strategy][contract][name], bg=color, font = font.Font(family='Arial', size=10))
                                 self.boxlist[(strategy, contract, j)] = l
                                 l.grid(row=i, column=j, sticky=E + W)
@@ -386,7 +394,7 @@ class monitor_yield(object):
                     self.boxlist[strategy] = l
                     l.grid(row=total_profit_row, column=0, rowspan=self.strategy_contain_contract_num[strategy], sticky=N + S + W + E)
 
-                    for z, total in enumerate([(self.strategy2totalprofit, total_profit_position), (self.strategy2totaldelta, total_delta_position), (self.strategy2totalgamma, total_gamma_position), (self.strategy2totalvega, total_vega_position), (self.strategy2totaltheta, total_theta_position), (self.max_total_profit, max_total_profit_position)]):
+                    for z, total in enumerate([(self.strategy2totalprofit, total_profit_position), (self.strategy2totaldelta, total_delta_position), (self.strategy2totalgamma, total_gamma_position), (self.strategy2totalvega, total_vega_position), (self.strategy2totaltheta, total_theta_position), (self.max_total_profit, max_total_profit_position), (self.min_total_profit, min_total_profit_position)]):
                         l = Label(self.p_root, text=1, height=self.strategy_contain_contract_num[strategy], textvariable=total[0][strategy], bg=color, font = font.Font(family='Arial', size=10))
                         self.boxlist[('总', strategy, z)] = l
                         l.grid(row=total_profit_row, column=total[1], rowspan=self.strategy_contain_contract_num[strategy], sticky=N + S + W + E)
@@ -465,17 +473,14 @@ class monitor_yield(object):
             opt.P = LastPrice
             opt.bid = BidPrice1
             opt.ask = AskPrice1
-            # update S, k0, posi
-            data_opt[sty].S_k0_posi(mat)
+            # update S, posi
+            data_opt[sty].S_posi(mat)
             opt.S = data_opt[sty].S[mat]
             # update time
             data_opt[sty].T[mat] = data_opt[sty].initT[mat] + ((15 - localtime.tm_hour - 1 - 1.5 * (localtime.tm_hour < 12)) * 60 * 60 + (60 - localtime.tm_min -1) * 60 + (60 - localtime.tm_sec) + 120) / (60 * 60 * 4 + 120) / 244
             opt.T = data_opt[sty].T[mat]
             # update cb
-            if BidPrice1 == AskPrice1 and '' not in [BidPrice1, AskPrice1] and not [BidPrice1, AskPrice1] == [data_opt[sty].mc] * 2:
-                opt.cb = True
-            else:
-                opt.cb = False
+            opt.cb = True if BidPrice1 == AskPrice1 and '' not in [BidPrice1, AskPrice1] and not [BidPrice1, AskPrice1] == [data_opt[sty].mc] * 2 else False
             # yc master contract name
             opt.yc_master_contract = contract
 
@@ -513,6 +518,14 @@ class monitor_yield(object):
                 if not avgP == '' and ((localtime.tm_hour == 9 and localtime.tm_min < 31) or self.label_var[strategy][contract]['均价'].get() == '0'):
                     self.label_var[strategy][contract]['均价'].set('{:g}'.format(avgP))
 
+                # 熔断提示
+                current_color = self.boxlist[(strategy, contract, 1)].cget('bg')
+                if contract_type == 'oty':
+                    if not current_color == '#FF0000' and opt.cb:
+                        self.boxlist[(strategy, contract, 1)].configure(bg='#FF0000')
+                    if current_color == '#FF0000' and not opt.cb:
+                        self.boxlist[(strategy, contract, 1)].configure(bg=self.colors[p % len(self.colors)])
+
                 price_conver = 0
                 if contract_type == 'oty':
                     price_conver = data_opt[sty].cm
@@ -543,6 +556,14 @@ class monitor_yield(object):
                 except:
                     pass
 
+                # 当前价格为0的提示
+                current_color = self.boxlist[(strategy, contract, 15)].cget('bg')
+                current_price = float(self.label_var[strategy][contract]['当前价格'].get())
+                if not current_color == '#FF0000' and current_price == 0:
+                    self.boxlist[(strategy, contract, 15)].configure(bg='#FF0000')
+                if current_color == '#FF0000' and not current_price == 0:
+                    self.boxlist[(strategy, contract, 15)].configure(bg=self.colors[p % len(self.colors)])
+
                 total_profit = 0
                 middle_price_profit = 0
                 for val in list(self.label_var[strategy].keys()):
@@ -561,8 +582,11 @@ class monitor_yield(object):
                     self.after_update.pop(strategy)
 
                 trade_period = gl.get_value('trade_period')
-                if trade_period and not ((localtime.tm_hour == 9 and localtime.tm_min == 30) or (localtime.tm_hour == 11 and localtime.tm_min == 29) or (localtime.tm_hour == 13 and localtime.tm_min == 0)) and (middle_price_profit > float(self.max_total_profit[strategy].get())) and (BidPrice1 != AskPrice1 or sty == StockType.gz300) and not quote["TradingPrice"] == '' and strategy not in self.after_update.keys():
-                    self.max_total_profit[strategy].set('{:g}'.format(int(middle_price_profit)))
+                if trade_period and not ((localtime.tm_hour == 9 and localtime.tm_min == 30) or (localtime.tm_hour == 11 and localtime.tm_min == 29) or (localtime.tm_hour == 13 and localtime.tm_min == 0)) and (BidPrice1 != AskPrice1 or sty == StockType.gz300) and not quote["TradingPrice"] == '' and strategy not in self.after_update.keys():
+                    if middle_price_profit > float(self.max_total_profit[strategy].get()):
+                        self.max_total_profit[strategy].set('{:g}'.format(int(middle_price_profit)))
+                    if middle_price_profit < float(self.min_total_profit[strategy].get()):
+                        self.min_total_profit[strategy].set('{:g}'.format(int(middle_price_profit)))
 
                 # greeks
                 vol = int(self.label_var[strategy][contract]['持仓数'].get())
@@ -614,10 +638,7 @@ class monitor_yield(object):
                     overall = sum(sum(greeks[ty].values()) for ty in list(ty_position.keys()))
 
                     if len([0 for _ in ty_position.values() if _ == True]) > 1:
-                        if i < 2:
-                            _str = '{:.1f}'.format(overall)
-                        else:
-                            _str = '{:.0f}'.format(overall)
+                        _str = '{:.1f}'.format(overall) if i < 2 else '{:.0f}'.format(overall)
 
                         for ty in list(ty_position.keys()):
                             if ty_position[ty]:
@@ -654,22 +675,6 @@ class monitor_yield(object):
                     stg_greeks[strategy][comb[0]] = greeks
                     stg_greeks[strategy]['position']['type'] = ty_position
                     stg_greeks[strategy]['position']['mat'] = ty_mat_position
-
-                # 熔断提示
-                current_color = self.boxlist[(strategy, contract, 1)].cget('bg')
-                if contract_type == 'oty':
-                    if not current_color == '#FF0000' and opt.cb:
-                        self.boxlist[(strategy, contract, 1)].configure(bg='#FF0000')
-                    if current_color == '#FF0000' and not opt.cb:
-                        self.boxlist[(strategy, contract, 1)].configure(bg=self.colors[p])
-
-                # 当前价格为0的提示
-                current_color = self.boxlist[(strategy, contract, 14)].cget('bg')
-                current_price = float(self.label_var[strategy][contract]['当前价格'].get())
-                if not current_color == '#FF0000' and current_price == 0:
-                    self.boxlist[(strategy, contract, 14)].configure(bg='#FF0000')
-                if current_color == '#FF0000' and not current_price == 0:
-                    self.boxlist[(strategy, contract, 14)].configure(bg=self.colors[p])
 
             # greeks已更新flag
             for index in list(hg_index.keys()):
@@ -764,6 +769,7 @@ class monitor_yield(object):
         def callback():
             root.destroy()
             self.bs_root_flag = False
+            self.bs_update_flag = True
         root.protocol("WM_DELETE_WINDOW", callback)
         root.mainloop()
 
@@ -938,7 +944,7 @@ class monitor_yield(object):
                             current_time = time.time()
                             order_for_bd[strategy][contract]['rp'][reportID] = {}
                             order_for_bd[strategy][contract]['rp'][reportID]['ot'] = current_time
-                            order_for_bd[strategy][contract]['rp'][reportID]['num'] = originalqty if Direction == 1 else -1 * originalqty
+                            order_for_bd[strategy][contract]['rp'][reportID]['leavesqty'] = originalqty if Direction == 1 else -1 * originalqty
                             order_for_bd[strategy][contract]['rp'][reportID]['cancel_order'] = False
                             order_for_bd[strategy][contract]['rp'][reportID]['canceled'] = False
                     # 删单成功
@@ -947,9 +953,10 @@ class monitor_yield(object):
                             order_for_bd[strategy][contract]['rp'][reportID]['canceled'] = True
                     # 删单失败
                     elif ExecType == '12':
-                        num = order_for_bd[strategy][contract]['rp'][reportID]['num']
-                        if not num == 0:
-                            od.order_cancel(reportID)
+                        if reportID in list(order_for_bd[strategy][contract]['rp'].keys()):
+                            num = order_for_bd[strategy][contract]['rp'][reportID]['leavesqty']
+                            if not num == 0:
+                                od.order_cancel(reportID)
 
         # 补单
         if source == 'hedge':
@@ -1077,8 +1084,8 @@ class monitor_yield(object):
                 if source == 'build':
                     if strategy in list(order_for_bd.keys()):
                         if contract in list(order_for_bd[strategy].keys()):
-                            order_for_bd[strategy][contract]['num'] -= Volume if Direction == 1 else -1 * Volume
-                            order_for_bd[strategy][contract]['rp'][reportID]['num'] = leavesqty if Direction == 1 else -1 * leavesqty
+                            order_for_bd[strategy][contract]['leavesqty'] -= Volume if Direction == 1 else -1 * Volume
+                            order_for_bd[strategy][contract]['rp'][reportID]['leavesqty'] = leavesqty if Direction == 1 else -1 * leavesqty
 
             self.bs_refresh_signal.append(1)
             break
@@ -1212,9 +1219,13 @@ class monitor_yield(object):
 
         if strategy not in list(self.label_var.keys()):
             self.label_var[strategy] = {}
-            for init in [self.strategy2totalprofit, self.strategy2totaldelta, self.strategy2totalgamma, self.strategy2totalvega, self.strategy2totaltheta, self.max_total_profit]:
+            for init in [self.strategy2totalprofit, self.strategy2totaldelta, self.strategy2totalgamma, self.strategy2totalvega, self.strategy2totaltheta]:
                 init[strategy] = StringVar(self.p_root)
-                init[strategy].set('-inf')
+                init[strategy].set('0')
+            self.max_total_profit[strategy] = StringVar(self.p_root)
+            self.max_total_profit[strategy].set('-inf')
+            self.min_total_profit[strategy] = StringVar(self.p_root)
+            self.min_total_profit[strategy].set('inf')
 
         if contract not in list(self.label_var[strategy].keys()):
             self.label_var[strategy][contract] = {}
@@ -1290,7 +1301,7 @@ class monitor_yield(object):
 
         param = StringVar()
         paramChosen = ttk.Combobox(mp_root, width=10, textvariable=param)
-        paramChosen['values'] = ['持仓数', '均价', '平仓损益', '当日最大总收益']
+        paramChosen['values'] = ['持仓数', '均价', '平仓损益', '当日最大总收益', '当日最小总收益']
         paramChosen.grid(column=3, row=1, padx=5)
         paramChosen.current(0)
         self.mp_boxlist[0].append(paramChosen)
@@ -1320,7 +1331,9 @@ class monitor_yield(object):
             return
 
         if self.mp_boxlist[0][2].get() == '当日最大总收益':
-                self.max_total_profit[self.mp_boxlist[0][0].get()].set('{:g}'.format(float(self.mp_boxlist[0][3].get())))
+            self.max_total_profit[self.mp_boxlist[0][0].get()].set('{:g}'.format(float(self.mp_boxlist[0][3].get())))
+        elif self.mp_boxlist[0][2].get() == '当日最小总收益':
+            self.min_total_profit[self.mp_boxlist[0][0].get()].set('{:g}'.format(float(self.mp_boxlist[0][3].get())))
         else:
             if self.mp_boxlist[0][0].get() in list(self.label_var.keys()):
                 if self.mp_boxlist[0][1].get() in list(self.label_var[self.mp_boxlist[0][0].get()].keys()):
