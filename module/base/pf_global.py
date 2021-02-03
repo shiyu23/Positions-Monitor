@@ -139,7 +139,7 @@ def _init():
         for ty in [StockType.gz300, StockType.etf50, StockType.h300, StockType.s300, FutureType.IF, FutureType.IH]:
             Mat[format][ty] = []
 
-    global_var = {'holiday': holiday, 'str_to_type': str_to_type, 'type_to_str': type_to_str, 'Mat': Mat, 'localtime': time.localtime(), 'trade_period': False, 'QuoteID': [], 'data_opt': {}, 'stg_greeks': {}, 'hg_index': {}, 'hg_order': {'order': {}, 'Ft': {}, 'Opt': {}}, 'bd_index': {}, 'bd_order': {'order': {}}}
+    global_var = {'holiday': holiday, 'str_to_type': str_to_type, 'type_to_str': type_to_str, 'Mat': Mat, 'localtime': time.localtime(), 'trade_period': False, 'QuoteID': [], 'data_opt': {}, 'stg_greeks': {}, 'stg_posi': {}, 'hg_index': {}, 'hg_order': {'order': {}, 'Ft': {}, 'Opt': {}}, 'bd_index': {}, 'bd_order': {'order': {}}}
     global_var.update(mq)
     sub_all_options() # get Mat, QuoteID, data_opt
 
