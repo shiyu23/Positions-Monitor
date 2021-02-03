@@ -1,9 +1,17 @@
+import threading
+import time
+
 from ..base import pf_global as gl
 
 
+lock = threading.RLock()
+
 def order_api(target: str, price: str, num: int, strategy: str, source: str):
 
+    lock.acquire()
+
     if num == 0:
+        lock.release()
         return
 
     side = '1' if num > 0 else '2'
@@ -13,6 +21,7 @@ def order_api(target: str, price: str, num: int, strategy: str, source: str):
     elif price == 'MID':
         Price = 'MID+0'
     else:
+        lock.release()
         return
 
     if target[:10] in ['TC.F.CFFEX', 'TC.O.CFFEX']:
@@ -22,6 +31,7 @@ def order_api(target: str, price: str, num: int, strategy: str, source: str):
     elif target[:9] == 'TC.O.SZSE':
         mkt = 'szse'
     else:
+        lock.release()
         return
 
     ot = '2'
@@ -32,6 +42,7 @@ def order_api(target: str, price: str, num: int, strategy: str, source: str):
     elif source == 'build':
         tif = '1'
     else:
+        lock.release()
         return
 
     g_TradeZMQ = gl.get_value('g_TradeZMQ')
@@ -47,6 +58,7 @@ def order_api(target: str, price: str, num: int, strategy: str, source: str):
         account_used = account['stock']
 
     if account_used == None:
+        lock.release()
         return
 
     Param = {
@@ -76,6 +88,9 @@ def order_api(target: str, price: str, num: int, strategy: str, source: str):
         Param['OrderQty'] = str(n)
         g_TradeZMQ.new_order(g_TradeSession,Param)
         total_num -= n
+        time.sleep(0.2) # 每秒5笔下单限制
+
+    lock.release()
 
 
 def order_cancel(reportID: str):
