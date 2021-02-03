@@ -460,9 +460,14 @@ class hedge:
             return
 
         # 下单
-        for target in list(order[hedge_strategy].keys()):
-            num = order[hedge_strategy][target]
-            od.order_api(target, 'HIT', num, hedge_strategy, 'hedge')
-
         self.p_update_flag = False
         self.p_update_list = list(order[hedge_strategy].keys())
+
+        def _order():
+            for target in list(order[hedge_strategy].keys()):
+                num = order[hedge_strategy][target]
+                od.order_api(target, 'HIT', num, hedge_strategy, 'hedge')
+
+        _t = threading.Thread(target=_order)
+        _t.setDaemon(True)
+        _t.start()
