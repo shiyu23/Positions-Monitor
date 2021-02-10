@@ -95,6 +95,7 @@ class hedge:
         self.state.set('对冲')
         b = Button(self.root, textvariable=self.state, command=self.hedge_thread, width=10)
         b.grid(row=2, column=5, sticky=E, padx=5, pady=10)
+        self.boxlist['b'] = b
 
         b = Button(self.root, text='停止对冲', command=self.stop_hedge, width=10)
         b.grid(row=2, column=6, sticky=E, padx=5, pady=10)
@@ -255,7 +256,14 @@ class hedge:
             return
 
         if not self.p_update_flag:
+            color = self.boxlist['b'].cget('bg')
+            if color == 'SystemButtonFace':
+                self.boxlist['b'].configure(bg='#FF0000')
             return
+
+        color = self.boxlist['b'].cget('bg')
+        if color == '#FF0000':
+            self.boxlist['b'].configure(bg='SystemButtonFace')
 
         if not self.far_from_bs_update:
             return
@@ -271,19 +279,17 @@ class hedge:
 
         order[hedge_strategy] = {}
 
-
         Ft = gl.get_value('hg_order')['Ft']
         Opt = gl.get_value('hg_order')['Opt']
         Opt_for_hg_copy = copy.deepcopy(Opt)
 
-
         self.data_txt.write(time.strftime('%H:%M:%S', localtime) + ' | ' + '对冲判断前......' + '\n' + 'order for hedge：' + str(order) + '\n' + 'Ft for hg：' + str(Ft) + '\n' + 'Opt for hg：' + str(Opt) + '\n')
+        self.data_txt.flush()
 
 
         # 模式
         if_mm = self.boxlist['mm'].get()
         if_an = self.boxlist['an'].get()
-
 
         # 分配greeks
         def loc(total: float, con: float):
@@ -322,7 +328,6 @@ class hedge:
                 if not if_an and not mat in [Maturity.M1, Maturity.M2]:
                     continue
 
-
                 if i == 0:
                     future_type = FutureType.IH
                 else:
@@ -333,7 +338,6 @@ class hedge:
                 if hedge_way == '先期货后合成' and if_mm:
                     if not self.boxlist[future_type].get() == 0:
                         mat_future = Maturity(self.boxlist[future_type].get())
-
 
                 # 期货对冲
                 pre_future = 0
@@ -370,7 +374,6 @@ class hedge:
                     num_future = abs(current_greeks) // future_tool * np.sign(current_greeks) # 卖量
 
                 contract_for_future = data_opt[future_type].yc_master_contract[mat_future]
-
 
                 # 期权对冲
                 # 考虑替换
@@ -413,12 +416,10 @@ class hedge:
                 if not option_tool == 0:
                     num_opt = np.round(abs(current_greeks - num_future * future_tool) / option_tool, 0) * np.sign(current_greeks - num_future * future_tool)
 
-
                 # 合约名初始值已被覆盖
                 if contract_for_future == '' or '' in contract_for_option:
                     order.pop(hedge_strategy)
                     return
-
 
                 # for future
                 if not num_future == 0:
@@ -451,9 +452,9 @@ class hedge:
                             Opt[(hedge_strategy, sty, mat)][option_chosen] = 0 # 持仓 for call
                         Opt[(hedge_strategy, sty, mat)][option_chosen] -= num_opt
 
-
         self.data_txt.write(time.strftime('%H:%M:%S', localtime) + ' | ' + '对冲判断后......' + '\n' + 'order for hedge：' + hedge_strategy + str(order[hedge_strategy]) + '\n' + 'Ft for hg：' + str(Ft) + '\n' + 'Opt for hg：' + str(Opt) + '\n')
         self.data_txt.flush()
+
 
         if order[hedge_strategy] == {}:
             order.pop(hedge_strategy)

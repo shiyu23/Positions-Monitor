@@ -1,6 +1,8 @@
 from tkinter import *
 from tkinter import ttk
 import threading
+import math
+import copy
 import time
 
 from module.base.pf_enum import *
@@ -14,8 +16,16 @@ class build:
 
         self.index = index
         self.cb_in_grp = False
-        self.cb_msg_sent = False
-        self.vega = {}
+        self.order_completed = True
+        self.direction = 0
+        self.status = 'build'
+        self.position_built = {}
+        self.vega = {'long': 0, 'short': 0}
+        self.build_strategy = None
+        self.repeat = False
+        self.completed = False
+        self.first_detect = False
+        self.first_close = True
 
         # 记录
         localtime = gl.get_value('localtime')
@@ -38,13 +48,13 @@ class build:
             all_strategies = ['']
 
         root = Toplevel()
-        root.title('建仓')
+        root.title('VolSpread')
         index = [i for i, x in enumerate(geometry) if x == '+']
-        root.geometry("%dx%d+%d+%d" % (550, 180, int(geometry[index[0] + 1 : index[1]]), int(geometry[index[1] + 1 :]) + 500))
+        root.geometry("%dx%d+%d+%d" % (620, 180, int(geometry[index[0] + 1 : index[1]]), int(geometry[index[1] + 1 :]) + 500))
         canvas = Canvas(root, borderwidth=0)
         frame = Frame(canvas)
         self.root = frame
-        self.boxlist = {0:[], 2:[], 3:[]}
+        self.boxlist = {0:[], 2:[], 3:[], 4: []}
         vsb = Scrollbar(root, orient="vertical", command=canvas.yview)
         canvas.configure(yscrollcommand=vsb.set)
 
@@ -95,13 +105,19 @@ class build:
         stgChosen.current(0)
         self.boxlist[0].append(stgChosen)
 
-        self.state = StringVar()
-        self.state.set('建仓')
-        b = Button(self.root, textvariable=self.state, command=self.build_thread, width=10)
-        b.grid(row=2, column=4, sticky=E, padx=5, pady=10)
+        lb = ttk.Label(self.root, text = '是否来回建仓')
+        lb.grid(row=1, column=4)
+        self.boxlist['repeat'] = IntVar(self.root)
+        l = Checkbutton(self.root,variable=self.boxlist['repeat'])
+        l.grid(row=2, column=4, sticky=E + W, padx=10)
 
-        b = Button(self.root, text='停止建仓', command=self.stop_build, width=10)
+        self.state = StringVar()
+        self.state.set('启动')
+        b = Button(self.root, textvariable=self.state, command=self.build_thread, width=10)
         b.grid(row=2, column=5, sticky=E, padx=5, pady=10)
+
+        b = Button(self.root, text='停止', command=self.stop_build, width=10)
+        b.grid(row=2, column=6, sticky=E, padx=5, pady=10)
 
 
         lb = ttk.Label(self.root, text = '前跨')
@@ -135,11 +151,39 @@ class build:
         numEntry.grid(column=4, row=5, padx=5)
         self.boxlist[3].append(numEntry)
 
+        lb = ttk.Label(self.root, text = '平仓至vega')
+        lb.grid(row=6, column=3)
+        num = StringVar()
+        numEntry = ttk.Entry(self.root, width=10, textvariable=num)
+        numEntry.grid(column=4, row=6, padx=5)
+        self.boxlist[4].append(numEntry)
+
+        lb = ttk.Label(self.root, text = '建仓价格')
+        lb.grid(row=4, column=5)
+        price1 = StringVar()
+        price1Chosen = ttk.Combobox(self.root, width=10, textvariable=price1)
+        price1Chosen['values'] = ['MID', 'HIT']
+        price1Chosen.grid(column=6, row=4, padx=5)
+        price1Chosen.current(0)
+        self.boxlist[2].append(price1Chosen)
+
+        lb = ttk.Label(self.root, text = '平仓价格')
+        lb.grid(row=5, column=5)
+        price2 = StringVar()
+        price2Chosen = ttk.Combobox(self.root, width=10, textvariable=price2)
+        price2Chosen['values'] = ['HIT', 'MID']
+        price2Chosen.grid(column=6, row=5, padx=5)
+        price2Chosen.current(0)
+        self.boxlist[3].append(price2Chosen)
+
         def callback():
             self.stop_build()
             root.destroy()
             gl.global_var['bd_index'].pop(self.index)
             self.data_txt.close()
+            order = gl.get_value('bd_order')['order']
+            if self.build_strategy in list(order.keys()):
+                order.pop(self.build_strategy)
         root.protocol("WM_DELETE_WINDOW", callback)
         root.mainloop()
 
@@ -154,23 +198,35 @@ class build:
 
     def stop_build(self):
 
-        if self.state.get() == '建仓中......':
+        if self.state.get() == '运行中......':
             self.root.after_cancel(self.ongoing)
-            self.state.set('建仓')
-            for tp in [(0, 0), (0, 1), (0, 2), (2, 0), (2, 1), (3, 0), (3, 1)]:
+            self.state.set('启动')
+            for tp in [(2, 0), (2, 1), (3, 0), (3, 1), (4, 0), (2, 2), (3, 2)]:
                 self.boxlist[tp[0]][tp[1]].configure(state='normal')
 
 
     def build(self):
 
+        if self.completed:
+            return
+
         build_mat = self.boxlist[0][1].get()
         build_strategy = self.boxlist[0][2].get()
+        self.build_strategy = build_strategy
+        self.repeat = self.boxlist['repeat'].get()
+
+        build_price = self.boxlist[2][2].get()
+        close_price = self.boxlist[3][2].get()
+
+        if build_price not in ['HIT', 'MID'] or close_price not in ['HIT', 'MID']:
+            return
 
         try:
 
             build_upper = float(self.boxlist[2][0].get()) / 100
             build_lower = float(self.boxlist[3][0].get()) / 100
-            target_vega = float(self.boxlist[2][1].get())
+            target_vega = abs(float(self.boxlist[2][1].get()))
+            close_to_vega = abs(float(self.boxlist[4][0].get()))
             fore = abs(int(self.boxlist[3][1].get()))
 
         except:
@@ -187,9 +243,9 @@ class build:
 
         self.ongoing = self.root.after(500, self.build)
 
-        if self.state.get() == '建仓':
-            self.state.set('建仓中......')
-            for tp in [(0, 0), (0, 1), (0, 2), (2, 0), (2, 1), (3, 0), (3, 1)]:
+        if self.state.get() == '启动':
+            self.state.set('运行中......')
+            for tp in [(0, 0), (0, 1), (0, 2), (2, 0), (2, 1), (3, 0), (3, 1), (4, 0), (2, 2), (3, 2)]:
                 self.boxlist[tp[0]][tp[1]].configure(state='disabled')
 
         trade_period = gl.get_value('trade_period')
@@ -200,33 +256,53 @@ class build:
         order = gl.get_value('bd_order')['order']
         if build_strategy in list(order.keys()):
 
+            if not self.order_completed:
+                return
+
             # 判断上轮下单是否成交完成
             if [order[build_strategy][target]['leavesqty'] for target in list(order[build_strategy].keys())] == [0] * len(order[build_strategy]):
                 order.pop(build_strategy)
+
+                if self.status == 'close':
+                    stg_posi = gl.get_value('stg_posi')
+                    if build_strategy in list(stg_posi.keys()):
+                        self.position_built = stg_posi[build_strategy]
+
+                    for key in list(self.position_built.keys()):
+                        if not self.position_built[key] == 0:
+                            return
+
+                    if not self.repeat:
+                        self.completed = True
+                        return
+
+                    self.position_built = {}
+                    self.first_close = True
+                    self.direction = 0
+
                 return
 
-            # 未成交单处理
+            # 熔断提示
             current_time = time.time()
             target_list = list(order[build_strategy].keys())
 
-            if True in [gl.name_to_data(target).cb for target in list(order[build_strategy].keys())]:
+            if True in [gl.name_to_data(target).cb for target in list(order[build_strategy].keys())] and not self.cb_in_grp:
                 self.cb_in_grp = True
-                if not self.cb_msg_sent:
-                    self.cb_msg_sent = True
-                    def msg():
-                        messagebox.showinfo(title='熔断提示', message='建仓合约熔断了，请交易员操作')
-                    t = threading.Thread(target = msg,args=())
-                    t.start()
+                def msg():
+                    messagebox.showinfo(title='熔断提示', message='合约熔断，请交易员操作')
+                _t = threading.Thread(target = msg)
+                _t.setDaemon(True)
+                _t.start()
 
+            # 未成交单处理
             for i, target in enumerate(target_list):
 
-                if gl.name_to_data(target).cb:
-                    order[build_strategy][target]['status'] = 'cb'
+                rp_list = list(order[build_strategy][target]['rp'].keys())
 
-                # 合约未熔断（正常建仓）
+                # 合约未熔断（普通建/平仓）
                 if not self.cb_in_grp:
 
-                    for rp in list(order[build_strategy][target]['rp'].keys()):
+                    for rp in rp_list:
                         num = order[build_strategy][target]['rp'][rp]['leavesqty']
 
                         if not num == 0 and current_time - order[build_strategy][target]['rp'][rp]['ot'] > 3:
@@ -237,21 +313,32 @@ class build:
 
                             if order[build_strategy][target]['rp'][rp]['canceled']:
 
-                                if '.C.' in target:
-                                    couple_target = [t for t in target_list if '.C.' in t]
-                                elif '.P.' in target:
-                                    couple_target = [t for t in target_list if '.P.' in t]
-
-                                if 0 in [order[build_strategy][ct]['leavesqty'] for ct in couple_target]:
-                                    od.order_api(target, 'HIT', num, build_strategy, 'build')
-                                else:
-                                    od.order_api(target, 'MID', num, build_strategy, 'build')
                                 order[build_strategy][target]['rp'].pop(rp)
+
+                                if self.status == 'build':
+                                    if '.C.' in target:
+                                        couple_target = [t for t in target_list if '.C.' in t]
+                                    elif '.P.' in target:
+                                        couple_target = [t for t in target_list if '.P.' in t]
+
+                                    def _order():
+                                        if 0 in [order[build_strategy][ct]['leavesqty'] for ct in couple_target]:
+                                            od.order_api(target, 'HIT', num, build_strategy, 'build')
+                                        else:
+                                            od.order_api(target, build_price, num, build_strategy, 'build')
+
+                                elif self.status == 'close':
+                                    def _order():
+                                        od.order_api(target, close_price, num, build_strategy, 'build')
+
+                                _t = threading.Thread(target=_order)
+                                _t.setDaemon(True)
+                                _t.start()
 
                 # 合约熔断（撤单，出提示）
                 else:
 
-                    for rp in list(order[build_strategy][target]['rp'].keys()):
+                    for rp in rp_list:
                         num = order[build_strategy][target]['rp'][rp]['leavesqty']
 
                         if not num == 0 and not order[build_strategy][target]['rp'][rp]['cancel_order']:
@@ -266,13 +353,8 @@ class build:
 
             return
 
+
         order[build_strategy] = {}
-        if build_strategy not in self.vega.keys():
-            self.vega[build_strategy] = {'long': 0, 'short': 0}
-
-
-        self.data_txt.write(time.strftime('%H:%M:%S', localtime) + ' | ' + '建仓判断前......' + '\n' + 'order for build：' + str(order) + '\n')
-
 
         if '300' in build_strategy:
             fore_ty = StockType.gz300
@@ -287,7 +369,6 @@ class build:
         vix_dict_fore = data_opt[fore_ty].vix(mat_fore)
         vix_dict_hind = data_opt[hind_ty].vix(mat_hind)
 
-        direction = None
         if vix_dict_fore['cb'] == False and vix_dict_hind['cb'] == False:
             if vix_dict_fore['vix'] - vix_dict_hind['vix'] >= build_upper:
                 direction = -1
@@ -300,72 +381,163 @@ class build:
             order.pop(build_strategy)
             return
 
+        self.status = 'build'
+        stg_greeks = gl.get_value('stg_greeks')
+        if not self.first_detect:
+            self.first_detect = True
+            if build_strategy in list(stg_greeks.keys()):
+                v = sum(stg_greeks[build_strategy]['vega$'][fore_ty].values())
+                if not v == 0:
+                    self.direction = 1 if v > 0 else -1
+        if self.direction * direction == -1:
+            self.status = 'close'
+
         opt_fore = data_opt[fore_ty].OptionList[mat_fore][data_opt[fore_ty].posi[mat_fore]['atm']]
         opt_hind = data_opt[hind_ty].OptionList[mat_hind][data_opt[hind_ty].posi[mat_hind]['atm']]
 
-        if '' in [opt_fore[0].yc_master_contract, opt_fore[1].yc_master_contract, opt_hind[0].yc_master_contract, opt_hind[1].yc_master_contract]:
-            order.pop(build_strategy)
-            return
 
-        if direction == 1 and self.vega[build_strategy]['long'] > target_vega:
-            order.pop(build_strategy)
-            return
+        if self.status == 'build':
 
-        if direction == -1 and self.vega[build_strategy]['short'] < -1 * target_vega:
-            order.pop(build_strategy)
-            return
+            if '' in [opt_fore[0].yc_master_contract, opt_fore[1].yc_master_contract, opt_hind[0].yc_master_contract, opt_hind[1].yc_master_contract]:
+                order.pop(build_strategy)
+                return
 
-        fore *= direction
+            if direction == 1 and self.vega['long'] >= target_vega:
+                order.pop(build_strategy)
+                return
 
-        # 前跨合成期货 调 前跨delta中性
-        fore_delta = fore * data_opt[fore_ty].S[mat_fore] * data_opt[fore_ty].cm * (opt_fore[0].delta() + opt_fore[1].delta()) / 10000
-        fore_synfut_delta = data_opt[fore_ty].S[mat_fore] * data_opt[fore_ty].cm * (opt_fore[0].delta() - opt_fore[1].delta()) / 10000
-        fore_num_synfut = round(fore_delta / fore_synfut_delta, 0)
+            if direction == -1 and self.vega['short'] <= -1 * target_vega:
+                order.pop(build_strategy)
+                return
 
-        # vega中性
-        fore_straddle_vega = data_opt[fore_ty].cm * (opt_fore[0].vega() * (fore - fore_num_synfut) + opt_fore[1].vega() * (fore + fore_num_synfut)) * 0.01
-        hind_straddle_vega_per_synfut = data_opt[hind_ty].cm * (opt_hind[0].vega() + opt_hind[1].vega()) * 0.01
-        hind = -1 * round(fore_straddle_vega / hind_straddle_vega_per_synfut, 0)
+            fore *= direction
 
-        # 后跨合成期货 调 整体delta中性
-        fore_straddle_delta = fore_delta - fore_num_synfut * fore_synfut_delta
-        hind_straddle_delta = hind * data_opt[hind_ty].S[mat_hind] * data_opt[hind_ty].cm * (opt_hind[0].delta() + opt_hind[1].delta()) / 10000
-        delta_per_grp = fore_straddle_delta + hind_straddle_delta
-        hind_synfut_delta = data_opt[hind_ty].S[mat_hind] * data_opt[hind_ty].cm * (opt_hind[0].delta() - opt_hind[1].delta()) / 10000
-        hind_num_synfut = round(delta_per_grp / hind_synfut_delta, 0)
+            curr_fore_delta = 0
+            if build_strategy in list(stg_greeks.keys()) and fore_ty in list(stg_greeks[build_strategy]['delta$(万)'].keys()):
+                curr_fore_delta = sum(stg_greeks[build_strategy]['delta$(万)'][fore_ty].values())
+            c_p = 0 if (curr_fore_delta < 0 and direction > 0) or (curr_fore_delta > 0 and direction < 0) else 1
+            thred_fore_delta = fore * data_opt[fore_ty].S[mat_fore] * data_opt[fore_ty].cm * opt_fore[c_p].delta() / 10000
 
-        # 打单边 调 单品种delta中性
-        stg_greeks = gl.get_value('stg_greeks')
-        order[build_strategy] = {opt_fore[0].yc_master_contract: {'originalqty': fore - fore_num_synfut}, opt_hind[0].yc_master_contract: {'originalqty': hind - hind_num_synfut}, opt_fore[1].yc_master_contract: {'originalqty': fore + fore_num_synfut}, opt_hind[1].yc_master_contract: {'originalqty': hind + hind_num_synfut}}
-        fore_vega = fore_straddle_vega
-        if build_strategy in stg_greeks.keys():
-            fore_greeks = sum(stg_greeks[build_strategy]['delta$(万)'][fore_ty].values())
-            fore_delta_C = fore * data_opt[fore_ty].S[mat_fore] * data_opt[fore_ty].cm * opt_fore[0].delta() / 10000
-            fore_delta_P = fore * data_opt[fore_ty].S[mat_fore] * data_opt[fore_ty].cm * opt_fore[1].delta() / 10000
-            if (fore_greeks < 0 and fore_delta_C > 0 and fore_greeks < -1 * fore_delta_C) or (fore_greeks > 0 and fore_delta_C < 0 and fore_greeks > -1 * fore_delta_C):
-                order[build_strategy] = {opt_fore[0].yc_master_contract: {'originalqty': fore}, opt_hind[0].yc_master_contract: {'originalqty': hind}}
-                fore_vega = fore * opt_fore[0].vega() * data_opt[fore_ty].cm * 0.01
-            elif (fore_greeks < 0 and fore_delta_P > 0 and fore_greeks < -1 * fore_delta_P) or (fore_greeks > 0 and fore_delta_P < 0 and fore_greeks > -1 * fore_delta_P):
-                order[build_strategy] = {opt_fore[1].yc_master_contract: {'originalqty': fore}, opt_hind[1].yc_master_contract: {'originalqty': hind}}
-                fore_vega = fore * opt_fore[1].vega() * data_opt[fore_ty].cm * 0.01
+            # 普通建仓
+            if not abs(curr_fore_delta) >= abs(thred_fore_delta):
 
-        d = 'long' if direction == 1 else 'short'
-        self.vega[build_strategy][d] += fore_vega
+                # 前跨合成期货 调 前跨delta中性
+                fore_delta = fore * data_opt[fore_ty].S[mat_fore] * data_opt[fore_ty].cm * (opt_fore[0].delta() + opt_fore[1].delta()) / 10000
+                fore_synfut_delta = data_opt[fore_ty].S[mat_fore] * data_opt[fore_ty].cm * (opt_fore[0].delta() - opt_fore[1].delta()) / 10000
+                fore_num_synfut = round(fore_delta / fore_synfut_delta, 0)
 
+                # vega中性
+                fore_straddle_vega = data_opt[fore_ty].cm * (opt_fore[0].vega() * (fore - fore_num_synfut) + opt_fore[1].vega() * (fore + fore_num_synfut)) * 0.01
+                hind_straddle_vega_per_synfut = data_opt[hind_ty].cm * (opt_hind[0].vega() + opt_hind[1].vega()) * 0.01
+                hind = -1 * round(fore_straddle_vega / hind_straddle_vega_per_synfut, 0)
 
-        self.data_txt.write(time.strftime('%H:%M:%S', localtime) + ' | ' + '建仓判断后......' + '\n' + 'order for build：' + build_strategy + str(order[build_strategy]) + '\n')
-        self.data_txt.flush()
+                # 后跨合成期货 调 整体delta中性
+                fore_straddle_delta = fore_delta - fore_num_synfut * fore_synfut_delta
+                hind_straddle_delta = hind * data_opt[hind_ty].S[mat_hind] * data_opt[hind_ty].cm * (opt_hind[0].delta() + opt_hind[1].delta()) / 10000
+                delta_per_grp = fore_straddle_delta + hind_straddle_delta
+                hind_synfut_delta = data_opt[hind_ty].S[mat_hind] * data_opt[hind_ty].cm * (opt_hind[0].delta() - opt_hind[1].delta()) / 10000
+                hind_num_synfut = round(delta_per_grp / hind_synfut_delta, 0)
 
-        # 下单
-        if True in [gl.name_to_data(target).cb for target in list(order[build_strategy].keys())]:
-            order.pop(build_strategy)
-            return
+                order[build_strategy] = {opt_fore[0].yc_master_contract: {'originalqty': fore - fore_num_synfut}, opt_hind[0].yc_master_contract: {'originalqty': hind - hind_num_synfut}, opt_fore[1].yc_master_contract: {'originalqty': fore + fore_num_synfut}, opt_hind[1].yc_master_contract: {'originalqty': hind + hind_num_synfut}}
+                fore_vega = fore_straddle_vega
 
-        for target in list(order[build_strategy].keys()):
-            num = order[build_strategy][target]['originalqty']
-            order[build_strategy][target]['leavesqty'] = num
-            order[build_strategy][target]['status'] = 'normal'
-            order[build_strategy][target]['rp'] = {}
+                d = 'long' if direction == 1 else 'short'
+                self.vega[d] += fore_vega
+
+            # 打单边
+            else:
+
+                single_fore_vega = fore * data_opt[fore_ty].cm * opt_fore[c_p].vega() * 0.01
+                single_fore_delta = fore * data_opt[fore_ty].S[mat_fore] * data_opt[fore_ty].cm * opt_fore[c_p].delta() / 10000
+                single_hind_vega = data_opt[hind_ty].cm * opt_hind[c_p].vega() * 0.01
+                hind = round(-1 * single_fore_vega / single_hind_vega, 0)
+                single_hind_delta = hind * data_opt[hind_ty].S[mat_hind] * data_opt[hind_ty].cm * opt_hind[c_p].delta() / 10000
+                hind_synfut_delta = data_opt[hind_ty].S[mat_hind] * data_opt[hind_ty].cm * (opt_hind[0].delta() - opt_hind[1].delta()) / 10000
+                hind_num_synfut = round((single_fore_delta + single_hind_delta) / hind_synfut_delta, 0)
+
+                if c_p == 0:
+                    order[build_strategy] = {opt_fore[c_p].yc_master_contract: {'originalqty': fore}, opt_hind[0].yc_master_contract: {'originalqty': hind - hind_num_synfut}, opt_hind[1].yc_master_contract: {'originalqty': hind_num_synfut}}
+                else:
+                    order[build_strategy] = {opt_fore[c_p].yc_master_contract: {'originalqty': fore}, opt_hind[0].yc_master_contract: {'originalqty': -1 * hind_num_synfut}, opt_hind[1].yc_master_contract: {'originalqty': hind + hind_num_synfut}}
+
+                d = 'long' if direction == 1 else 'short'
+                self.vega[d] += single_fore_vega
+
+            self.data_txt.write(time.strftime('%H:%M:%S', localtime) + ' | ' + '建仓判断后......' + '\n' + 'order for build：' + build_strategy + str(order[build_strategy]) + '\n')
+            self.data_txt.flush()
+
+            # 下单
+            if True in [gl.name_to_data(target).cb for target in list(order[build_strategy].keys())]:
+                order.pop(build_strategy)
+                return
+
             self.cb_in_grp = False
-            self.cb_msg_sent = False
-            od.order_api(target, 'MID', num, build_strategy, 'build')
+            self.order_completed = False
+            self.direction = direction
+
+            def _order():
+                for target in list(order[build_strategy].keys()):
+                    # order
+                    num = order[build_strategy][target]['originalqty']
+                    order[build_strategy][target]['leavesqty'] = num
+                    order[build_strategy][target]['rp'] = {}
+                    od.order_api(target, build_price, num, build_strategy, 'build')
+                self.order_completed = True
+
+            _t = threading.Thread(target=_order)
+            _t.setDaemon(True)
+            _t.start()
+
+
+        elif self.status == 'close':
+
+            stg_posi = gl.get_value('stg_posi')
+            if build_strategy in list(stg_posi.keys()):
+                self.position_built = stg_posi[build_strategy]
+
+            if self.first_close:
+
+                # 先调一次整体delta中性
+                fore_delta = sum(stg_greeks[build_strategy]['delta$(万)'][fore_ty].values())
+                hind_delta = sum(stg_greeks[build_strategy]['delta$(万)'][hind_ty].values())
+                used_ty = fore_ty if abs(fore_delta) > abs(hind_delta) else hind_ty
+                used_mat = mat_fore if abs(fore_delta) > abs(hind_delta) else mat_hind
+                used_opt = opt_fore if abs(fore_delta) > abs(hind_delta) else opt_hind
+                delta_hedge = fore_delta + hind_delta
+                synfut_delta = data_opt[used_ty].S[used_mat] * data_opt[used_ty].cm * (used_opt[0].delta() - used_opt[1].delta()) / 10000
+                num_synfut = round(delta_hedge / synfut_delta, 0)
+                order[build_strategy] = {used_opt[0].yc_master_contract: {'originalqty': -1 * num_synfut}, used_opt[1].yc_master_contract: {'originalqty': num_synfut}}
+
+                self.first_close = False
+
+            else:
+
+                # 每组3000vega进行平仓
+                v = abs(sum(stg_greeks[build_strategy]['vega$'][fore_ty].values()))
+                close_vega = max(v - close_to_vega, 0)
+                for key in list(self.position_built.keys()):
+                    order[build_strategy][key] = {'originalqty': -1 * round(self.position_built[key] * min(3000, close_vega) / v, 0)}
+
+            self.data_txt.write(time.strftime('%H:%M:%S', localtime) + ' | ' + '平仓判断后......' + '\n' + 'order for build：' + build_strategy + str(order[build_strategy]) + '\n')
+            self.data_txt.flush()
+
+            # 下单
+            if True in [gl.name_to_data(target).cb for target in list(order[build_strategy].keys())]:
+                order.pop(build_strategy)
+                return
+
+            self.cb_in_grp = False
+            self.order_completed = False
+
+            def _order():
+                for target in list(order[build_strategy].keys()):
+                    # order
+                    num = order[build_strategy][target]['originalqty']
+                    order[build_strategy][target]['leavesqty'] = num
+                    order[build_strategy][target]['rp'] = {}
+                    od.order_api(target, close_price, num, build_strategy, 'build')
+                self.order_completed = True
+
+            _t = threading.Thread(target=_order)
+            _t.setDaemon(True)
+            _t.start()
