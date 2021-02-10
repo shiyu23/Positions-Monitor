@@ -345,13 +345,26 @@ class monitor_yield(object):
         messagebox.showinfo(title='~', message='对不起，还在开发~')
 
 
+    def update_posi(self):
+        stg_posi = {}
+        for strategy in list(self.label_var.keys()):
+            stg_posi[strategy] = {}
+            for contract in list(self.label_var[strategy].keys()):
+                if '持仓数' in list(self.label_var[strategy][contract].keys()):
+                    stg_posi[strategy][contract] = int(self.label_var[strategy][contract]['持仓数'].get())
+        gl.set_value('stg_posi', stg_posi)
+
+
     def p_refresh(self):
         gl.set_value('localtime', time.localtime())
         localtime = gl.get_value('localtime')
+
         if (localtime.tm_hour == 9 and localtime.tm_min >= 30) or localtime.tm_hour == 10 or (localtime.tm_hour == 11 and localtime.tm_min < 30) or localtime.tm_hour == 13 or (localtime.tm_hour == 14 and localtime.tm_min < 57):
             gl.set_value('trade_period', True)
         else:
             gl.set_value('trade_period', False)
+
+        self.update_posi()
 
 
         if len(self.add_new_signal) != 0:
@@ -428,9 +441,9 @@ class monitor_yield(object):
                     self.main_root_position = self.main_root.winfo_geometry()
                     bd_index[index].open_build_ui(self.main_root_position)
 
-                b = Button(self.p_root, text='建仓', width=10, command=create_build)
+                b = Button(self.p_root, text='VolSpread', width=10, command=create_build)
                 b.grid(row=i, column= j-3, columnspan=1, sticky=W, padx=10, pady=10)
-                self.boxlist['建仓按钮'] = b
+                self.boxlist['VolSpread按钮'] = b
 
             except:
                 self.add_new_signal.append(1)
@@ -971,7 +984,13 @@ class monitor_yield(object):
                     self.addin_order['id'].append(id)
                 elif ExecType == '10':
                     self.addin_order['report'].append(reportID)
-                od.order_api(contract, 'HIT', num_add, strategy, source)
+
+                def _order():
+                    od.order_api(contract, 'HIT', num_add, strategy, source)
+
+                _t = threading.Thread(target=_order)
+                _t.setDaemon(True)
+                _t.start()
 
 
         if id == '':
@@ -980,30 +999,30 @@ class monitor_yield(object):
 
         flag = False
 
-        if ExecType in ['3','6'] and not Price == 0.0:
-            if id not in list(self.strategy_trade_return.keys()):
-                if cumqty != 0:
-                    Volume = cumqty
+        if not Price == 0.0:
+            if ExecType in ['3', '6']:
+                if id not in list(self.strategy_trade_return.keys()):
+                    if cumqty != 0:
+                        Volume = cumqty
+                        flag = True
+
+                    self.strategy_trade_return[id] = leavesqty
+
+                else:
+                    Volume = self.strategy_trade_return[id] - leavesqty
+                    self.strategy_trade_return[id] = leavesqty
                     flag = True
 
-                self.strategy_trade_return[id] = leavesqty
-
-            else:
-                Volume = self.strategy_trade_return[id] - leavesqty
-                self.strategy_trade_return[id] = leavesqty
-                flag = True
-
-        # 对冲下单
-        if source == 'hedge':
-            if ExecType == '5' and id not in self.strategy_trade_return['type5']:
-                if id not in list(self.strategy_trade_return.keys()):
-                    Volume = cumqty
-                else:
-                    Volume = cumqty - (originalqty - self.strategy_trade_return[id])
+            if ExecType == '5':
+                if id not in self.strategy_trade_return['type5']:
+                    if id not in list(self.strategy_trade_return.keys()):
+                        Volume = cumqty
+                    else:
+                        Volume = cumqty - (originalqty - self.strategy_trade_return[id])
                 
-                self.strategy_trade_return[id] = leavesqty
-                self.strategy_trade_return['type5'].append(id)
-                flag = True
+                    self.strategy_trade_return[id] = leavesqty
+                    self.strategy_trade_return['type5'].append(id)
+                    flag = True
 
 
         while flag:
@@ -1068,6 +1087,8 @@ class monitor_yield(object):
                               + in_profit
                 self.label_var[strategy][contract]['平仓损益'].set('%0.1f' % deal_profit)
                 self.label_var[strategy][contract]['均价'].set('{:g}'.format(price))
+
+                self.update_posi()
 
 
                 # 判断 自对冲下单 是否完成
@@ -1196,6 +1217,8 @@ class monitor_yield(object):
                           + bs_profit
             self.label_var[strategy][contract]['平仓损益'].set('%0.1f' % deal_profit)
             self.label_var[strategy][contract]['均价'].set('{:g}'.format(price))
+
+            self.update_posi()
 
 
         for k in ks:
@@ -1339,6 +1362,8 @@ class monitor_yield(object):
                 if self.mp_boxlist[0][1].get() in list(self.label_var[self.mp_boxlist[0][0].get()].keys()):
                     self.label_var[self.mp_boxlist[0][0].get()][self.mp_boxlist[0][1].get()][self.mp_boxlist[0][2].get()].set('{:g}'.format(float(self.mp_boxlist[0][3].get())))
 
+        self.update_posi()
+
 
 def OnRealTimeQuote(Quote): # quote thread
     MY.p_update(Quote)
@@ -1416,10 +1441,12 @@ def main():
     q_data = gl.get_value('q_data')
 
     t1 = threading.Thread(target = trade_sub_th,args=(g_TradeZMQ,t_data["SubPort"],))
+    t1.setDaemon(True)
     t1.start()
 
     #quote
     t2 = threading.Thread(target = quote_sub_th,args=(g_QuoteZMQ,q_data["SubPort"],))
+    t2.setDaemon(True)
     t2.start()
 
     while not t2.is_alive():
