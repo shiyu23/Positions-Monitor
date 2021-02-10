@@ -29,8 +29,8 @@ def _init():
         root.destroy()
 
     def choice2():
-        mq['t_data'] = mq['g_TradeZMQ'].trade_connect("51879") # 方正1
-        mq['q_data'] = mq['g_QuoteZMQ'].quote_connect("51909")
+        mq['t_data'] = mq['g_TradeZMQ'].trade_connect("52176") # 国联2
+        mq['q_data'] = mq['g_QuoteZMQ'].quote_connect("52206")
         root.destroy()
 
     def choice3():
@@ -41,7 +41,7 @@ def _init():
     b = Button(root, text='公版', width=10, command=choice1)
     b.grid(row=0, column= 0, columnspan=1, sticky=W, padx=10, pady=10)
 
-    b = Button(root, text='方正1', width=10, command=choice2)
+    b = Button(root, text='国联2', width=10, command=choice2)
     b.grid(row=0, column= 1, columnspan=1, sticky=W, padx=10, pady=10)
 
     b = Button(root, text='方正2', width=10, command=choice3)
