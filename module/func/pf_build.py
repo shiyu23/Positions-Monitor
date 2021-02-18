@@ -20,7 +20,6 @@ class build:
         self.direction = 0
         self.status = 'build'
         self.position_built = {}
-        self.vega = {'long': 0, 'short': 0}
         self.build_strategy = None
         self.repeat = False
         self.completed = False
@@ -383,12 +382,13 @@ class build:
 
         self.status = 'build'
         stg_greeks = gl.get_value('stg_greeks')
+        v = 0
+        if build_strategy in list(stg_greeks.keys()):
+            v = sum(stg_greeks[build_strategy]['vega$'][fore_ty].values())
         if not self.first_detect:
             self.first_detect = True
-            if build_strategy in list(stg_greeks.keys()):
-                v = sum(stg_greeks[build_strategy]['vega$'][fore_ty].values())
-                if not v == 0:
-                    self.direction = 1 if v > 0 else -1
+            if not v == 0:
+                self.direction = 1 if v > 0 else -1
         if self.direction * direction == -1:
             self.status = 'close'
 
@@ -402,11 +402,7 @@ class build:
                 order.pop(build_strategy)
                 return
 
-            if direction == 1 and self.vega['long'] >= target_vega:
-                order.pop(build_strategy)
-                return
-
-            if direction == -1 and self.vega['short'] <= -1 * target_vega:
+            if v <= -1 * target_vega or v >= target_vega:
                 order.pop(build_strategy)
                 return
 
@@ -441,9 +437,6 @@ class build:
                 order[build_strategy] = {opt_fore[0].yc_master_contract: {'originalqty': fore - fore_num_synfut}, opt_hind[0].yc_master_contract: {'originalqty': hind - hind_num_synfut}, opt_fore[1].yc_master_contract: {'originalqty': fore + fore_num_synfut}, opt_hind[1].yc_master_contract: {'originalqty': hind + hind_num_synfut}}
                 fore_vega = fore_straddle_vega
 
-                d = 'long' if direction == 1 else 'short'
-                self.vega[d] += fore_vega
-
             # 打单边
             else:
 
@@ -459,9 +452,6 @@ class build:
                     order[build_strategy] = {opt_fore[c_p].yc_master_contract: {'originalqty': fore}, opt_hind[0].yc_master_contract: {'originalqty': hind - hind_num_synfut}, opt_hind[1].yc_master_contract: {'originalqty': hind_num_synfut}}
                 else:
                     order[build_strategy] = {opt_fore[c_p].yc_master_contract: {'originalqty': fore}, opt_hind[0].yc_master_contract: {'originalqty': -1 * hind_num_synfut}, opt_hind[1].yc_master_contract: {'originalqty': hind + hind_num_synfut}}
-
-                d = 'long' if direction == 1 else 'short'
-                self.vega[d] += single_fore_vega
 
             self.data_txt.write(time.strftime('%H:%M:%S', localtime) + ' | ' + '建仓判断后......' + '\n' + 'order for build：' + build_strategy + str(order[build_strategy]) + '\n')
             self.data_txt.flush()
@@ -513,10 +503,9 @@ class build:
             else:
 
                 # 每组3000vega进行平仓
-                v = abs(sum(stg_greeks[build_strategy]['vega$'][fore_ty].values()))
-                close_vega = max(v - close_to_vega, 0)
+                close_vega = max(abs(v) - close_to_vega, 0)
                 for key in list(self.position_built.keys()):
-                    order[build_strategy][key] = {'originalqty': -1 * round(self.position_built[key] * min(3000, close_vega) / v, 0)}
+                    order[build_strategy][key] = {'originalqty': -1 * round(self.position_built[key] * min(3000, close_vega) / abs(v), 0)}
 
             self.data_txt.write(time.strftime('%H:%M:%S', localtime) + ' | ' + '平仓判断后......' + '\n' + 'order for build：' + build_strategy + str(order[build_strategy]) + '\n')
             self.data_txt.flush()
