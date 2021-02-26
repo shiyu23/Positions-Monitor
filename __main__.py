@@ -19,9 +19,11 @@ from module.func import pf_build
 class monitor_yield(object):
 
     def __init__(self):
+
         self.load_file_signal = True
         self.strategy_contain_contract_num = {}
         self.strategy2totalprofit = {}
+        self.strategy2totalprofit_per = {}
         self.strategy2totaldelta = {}
         self.strategy2totalgamma = {}
         self.strategy2totalvega = {}
@@ -51,12 +53,14 @@ class monitor_yield(object):
 
         # 补单
         self.addin_order = {'id': [], 'report': []}
+
         # 记录
         Exist = os.path.exists('./log')
         if not Exist:
             os.makedirs('./log')
         localtime = gl.get_value('localtime')
         self.order_data_txt = open(f'./log/order data {localtime.tm_year}-{localtime.tm_mon}-{localtime.tm_mday}.txt', 'a')
+
         #部位是否有熔断
         self.if_position_cb: bool = False
         #self.lock = threading.RLock()
@@ -92,10 +96,17 @@ class monitor_yield(object):
         root.config(menu=menubar)
 
         self.p_root = root
-        names = ['策略', '合约', '持仓数', '均价', '留仓损益', '平仓损益', '中价损益', '总收益', '当日最大总收益', '当日最小总收益', '总Delta$(万)', '总Gamma$(万)', '总Vega$', '总Theta$', '买卖中价', '当前价格', 'delta$(万)', 'gamma$(万)', 'vega$', 'theta$']
+        names = ['策略', '合约', '持仓数', '均价', '留仓损益', '平仓损益', '中价损益', '总收益', '总收益%', '当日最大总收益', '当日最小总收益', '总Delta$(万)', '总Gamma$(万)', '总Vega$', '总Theta$', '买卖中价', '当前价格', 'delta$(万)', 'gamma$(万)', 'vega$', 'theta$']
         self.p_names = names
         for i,name in enumerate(names):
             Label(root, text=name, font = font.Font(family='Arial', size=10, weight=font.BOLD)).grid(row=0, column=i, sticky=E + W, pady=1)
+
+        self.totalasset = StringVar(self.p_root)
+        self.totalasset.set('0')
+        self.ETFasset = StringVar(self.p_root)
+        self.ETFasset.set('0')
+        self.IOasset = StringVar(self.p_root)
+        self.IOasset.set('0')
 
         def callback():
             def close():
@@ -172,7 +183,7 @@ class monitor_yield(object):
 
             if values[0] not in list(self.label_var.keys()):
                 self.label_var[values[0]] = {}
-                for init in [self.strategy2totalprofit, self.strategy2totaldelta, self.strategy2totalgamma, self.strategy2totalvega, self.strategy2totaltheta]:
+                for init in [self.strategy2totalprofit, self.strategy2totalprofit_per, self.strategy2totaldelta, self.strategy2totalgamma, self.strategy2totalvega, self.strategy2totaltheta]:
                     init[values[0]] = StringVar(self.p_root)
                     init[values[0]].set('0')
                 self.max_total_profit[values[0]] = StringVar(self.p_root)
@@ -338,8 +349,6 @@ class monitor_yield(object):
         for i, strategy in enumerate(strategies):
             Label(root, text=strategy).grid(row=i, column=0, sticky=E)
 
-        root.mainloop()
-
 
     def modify_strategy_name(self):
         messagebox.showinfo(title='~', message='对不起，还在开发~')
@@ -366,6 +375,30 @@ class monitor_yield(object):
 
         self.update_posi()
 
+        if gl.global_var['account']['sim'] != None:
+            asset = gl.global_var['g_TradeZMQ'].margin(gl.global_var['g_TradeSession'], gl.global_var['account']['sim']['AccountMask'])
+            if asset['Margins'][0]['MarketPremium'] != '0':
+                self.totalasset.set('总可用' + '\n' + '{:.2%}'.format(float(asset['Margins'][0]['ExcessEquity']) / float(asset['Margins'][0]['MarketPremium'])))
+
+        if gl.global_var['account']['stock'] != None and gl.global_var['account']['index'] != None:
+
+            asset = gl.global_var['g_TradeZMQ'].margin(gl.global_var['g_TradeSession'], gl.global_var['account']['stock']['AccountMask'])
+            ETFasset_EE = float(asset['Margins'][0]['ExcessEquity'])
+            ETFasset_MP = float(asset['Margins'][0]['MarketPremium'])
+
+            if ETFasset_MP != 0:
+                self.ETFasset.set('股票' + '\n' + '{:.2%}'.format(ETFasset_EE / ETFasset_MP))
+
+            asset = gl.global_var['g_TradeZMQ'].margin(gl.global_var['g_TradeSession'], gl.global_var['account']['index']['AccountMask'])
+            IOasset_EE = float(asset['Margins'][0]['ExcessEquity'])
+            IOasset_MP = float(asset['Margins'][0]['MarketPremium'])
+            
+            if IOasset_MP != 0:
+                self.IOasset.set('期货' + '\n' + '{:.2%}'.format(IOasset_EE / IOasset_MP))
+
+            if ETFasset_MP != 0 and IOasset_MP != 0:
+                self.totalasset.set('总可用' + '\n' + '{:.2%}'.format((ETFasset_EE + IOasset_EE) / (ETFasset_MP + IOasset_MP)))
+
 
         if len(self.add_new_signal) != 0:
             # 清空信号
@@ -378,6 +411,7 @@ class monitor_yield(object):
             self.boxlist = {}
             i = 1
             total_profit_position = self.p_names.index('总收益')
+            total_profit_position_per = self.p_names.index('总收益%')
             total_delta_position = self.p_names.index('总Delta$(万)')
             total_gamma_position = self.p_names.index('总Gamma$(万)')
             total_vega_position = self.p_names.index('总Vega$')
@@ -396,7 +430,7 @@ class monitor_yield(object):
                     # 盈利界面合约显示顺序
                     for contract in sorted(self.label_var[strategy].keys()):
                         for j, name in enumerate(self.p_names):
-                            if name not in ['策略', '总收益', '总Delta$(万)', '总Gamma$(万)', '总Vega$', '总Theta$', '当日最大总收益', '当日最小总收益']:
+                            if name not in ['策略', '总收益', '总收益%', '总Delta$(万)', '总Gamma$(万)', '总Vega$', '总Theta$', '当日最大总收益', '当日最小总收益']:
                                 l = Label(self.p_root, text='', textvariable=self.label_var[strategy][contract][name], bg=color, font = font.Font(family='Arial', size=10))
                                 self.boxlist[(strategy, contract, j)] = l
                                 l.grid(row=i, column=j, sticky=E + W)
@@ -407,7 +441,7 @@ class monitor_yield(object):
                     self.boxlist[strategy] = l
                     l.grid(row=total_profit_row, column=0, rowspan=self.strategy_contain_contract_num[strategy], sticky=N + S + W + E)
 
-                    for z, total in enumerate([(self.strategy2totalprofit, total_profit_position), (self.strategy2totaldelta, total_delta_position), (self.strategy2totalgamma, total_gamma_position), (self.strategy2totalvega, total_vega_position), (self.strategy2totaltheta, total_theta_position), (self.max_total_profit, max_total_profit_position), (self.min_total_profit, min_total_profit_position)]):
+                    for z, total in enumerate([(self.strategy2totalprofit, total_profit_position), (self.strategy2totalprofit_per, total_profit_position_per), (self.strategy2totaldelta, total_delta_position), (self.strategy2totalgamma, total_gamma_position), (self.strategy2totalvega, total_vega_position), (self.strategy2totaltheta, total_theta_position), (self.max_total_profit, max_total_profit_position), (self.min_total_profit, min_total_profit_position)]):
                         l = Label(self.p_root, text=1, height=self.strategy_contain_contract_num[strategy], textvariable=total[0][strategy], bg=color, font = font.Font(family='Arial', size=10))
                         self.boxlist[('总', strategy, z)] = l
                         l.grid(row=total_profit_row, column=total[1], rowspan=self.strategy_contain_contract_num[strategy], sticky=N + S + W + E)
@@ -416,11 +450,11 @@ class monitor_yield(object):
                 j = len(self.p_names) - 1
 
                 b = Button(self.p_root, text='成交回报', width=10, command=self.open_bs_ui)
-                b.grid(row=i, column= j, columnspan=1, sticky=W, padx=10, pady=10)
+                b.grid(row=i, column=j, columnspan=1, sticky=W, padx=10, pady=10)
                 self.boxlist['成交回报按钮'] = b
 
                 b = Button(self.p_root, text='参数修改', width=10, command=self.open_mp_ui)
-                b.grid(row=i, column= j-1, columnspan=1, sticky=W, padx=10, pady=10)
+                b.grid(row=i, column=j-1, columnspan=1, sticky=W, padx=10, pady=10)
                 self.boxlist['参数修改按钮'] = b
 
                 def create_hedge():
@@ -431,7 +465,7 @@ class monitor_yield(object):
                     hg_index[index].open_hedge_ui(list(self.label_var.keys()), self.main_root_position)
 
                 b = Button(self.p_root, text='对冲', width=10, command=create_hedge)
-                b.grid(row=i, column= j-2, columnspan=1, sticky=W, padx=10, pady=10)
+                b.grid(row=i, column=j-2, columnspan=1, sticky=W, padx=10, pady=10)
                 self.boxlist['对冲按钮'] = b
 
                 def create_build():
@@ -442,8 +476,20 @@ class monitor_yield(object):
                     bd_index[index].open_build_ui(self.main_root_position)
 
                 b = Button(self.p_root, text='VolSpread', width=10, command=create_build)
-                b.grid(row=i, column= j-3, columnspan=1, sticky=W, padx=10, pady=10)
+                b.grid(row=i, column=j-3, columnspan=1, sticky=W, padx=10, pady=10)
                 self.boxlist['VolSpread按钮'] = b
+
+                b = Label(self.p_root, text='', textvariable=self.totalasset, font = font.Font(family='Arial', size=10, weight=font.BOLD))
+                b.grid(row=i, column=j-4, columnspan=1, sticky=W, padx=10, pady=10)
+                self.boxlist['总可用'] = b
+
+                b = Label(self.p_root, text='', textvariable=self.ETFasset, font = font.Font(family='Arial', size=10, weight=font.BOLD))
+                b.grid(row=i, column=j-5, columnspan=1, sticky=W, padx=10, pady=10)
+                self.boxlist['股票'] = b
+
+                b = Label(self.p_root, text='', textvariable=self.IOasset, font = font.Font(family='Arial', size=10, weight=font.BOLD))
+                b.grid(row=i, column=j-6, columnspan=1, sticky=W, padx=10, pady=10)
+                self.boxlist['期货'] = b
 
             except:
                 self.add_new_signal.append(1)
@@ -570,12 +616,12 @@ class monitor_yield(object):
                     pass
 
                 # 当前价格为0的提示
-                current_color = self.boxlist[(strategy, contract, 15)].cget('bg')
+                current_color = self.boxlist[(strategy, contract, 16)].cget('bg')
                 current_price = float(self.label_var[strategy][contract]['当前价格'].get())
                 if not current_color == '#FF0000' and current_price == 0:
-                    self.boxlist[(strategy, contract, 15)].configure(bg='#FF0000')
+                    self.boxlist[(strategy, contract, 16)].configure(bg='#FF0000')
                 if current_color == '#FF0000' and not current_price == 0:
-                    self.boxlist[(strategy, contract, 15)].configure(bg=self.colors[p % len(self.colors)])
+                    self.boxlist[(strategy, contract, 16)].configure(bg=self.colors[p % len(self.colors)])
 
                 total_profit = 0
                 middle_price_profit = 0
@@ -590,6 +636,11 @@ class monitor_yield(object):
 
                 self.strategy2totalprofit[strategy].set('{}\n{}'.format(int(total_profit),
                                                                         int(middle_price_profit)))
+
+                total_profit_per = total_profit / 11000000
+                middle_price_profit_per = middle_price_profit / 11000000
+                self.strategy2totalprofit_per[strategy].set('{:.2%}\n{:.2%}'.format(total_profit_per,
+                                                                                    middle_price_profit_per))
 
                 if strategy in list(self.after_update.keys()) and time.time() - self.after_update[strategy] > 5:
                     self.after_update.pop(strategy)
@@ -762,6 +813,7 @@ class monitor_yield(object):
         nb.pack()
 
         def tab_change(*args):
+            self.bs_update_flag = True
             self.bs_refresh_signal.append(1)
 
         nb.bind('<<NotebookTabChanged>>',tab_change)
@@ -784,7 +836,6 @@ class monitor_yield(object):
             self.bs_root_flag = False
             self.bs_update_flag = True
         root.protocol("WM_DELETE_WINDOW", callback)
-        root.mainloop()
 
 
     def bs_refresh(self):
@@ -795,7 +846,6 @@ class monitor_yield(object):
             # 清空信号
             for i in range(len(self.bs_refresh_signal) - 1, -1, -1):
                 self.bs_refresh_signal.pop(i)
-
 
             for k in list(self.bs_boxlist[tab].keys()):
                 if not self.bs_update_flag:
@@ -817,6 +867,7 @@ class monitor_yield(object):
             if self.bs_update_flag:
                 self.bs_boxlist[tab] = {}
 
+            self.bs_update_flag = False
 
             line = 1
             for i, k1 in enumerate(list(self.buy_sell_var.keys())):
@@ -846,8 +897,8 @@ class monitor_yield(object):
                 self.bs_boxlist[tab][i].append(l)
                 line += 1
 
-
             if tab == '':
+
                 i = len(self.bs_boxlist[tab])
                 self.bs_boxlist[tab]['line1'] = []
                 stg = StringVar()
@@ -912,8 +963,6 @@ class monitor_yield(object):
                 b.grid(row=i + 2, column=2, sticky=E, padx=5, pady=10)
                 self.bs_boxlist[tab]['line2'].append(b)
 
-        if self.bs_update_flag:
-            self.bs_update_flag = False
         self.bs_root[tab].after(3000, self.bs_refresh) # when root destroyed, stops.
 
 
@@ -1242,7 +1291,7 @@ class monitor_yield(object):
 
         if strategy not in list(self.label_var.keys()):
             self.label_var[strategy] = {}
-            for init in [self.strategy2totalprofit, self.strategy2totaldelta, self.strategy2totalgamma, self.strategy2totalvega, self.strategy2totaltheta]:
+            for init in [self.strategy2totalprofit, self.strategy2totalprofit_per, self.strategy2totaldelta, self.strategy2totalgamma, self.strategy2totalvega, self.strategy2totaltheta]:
                 init[strategy] = StringVar(self.p_root)
                 init[strategy].set('0')
             self.max_total_profit[strategy] = StringVar(self.p_root)
@@ -1343,7 +1392,6 @@ class monitor_yield(object):
             root.destroy()
             self.mp_root_flag = False
         root.protocol("WM_DELETE_WINDOW", callback)
-        root.mainloop()
 
 
     def modify_param(self):
