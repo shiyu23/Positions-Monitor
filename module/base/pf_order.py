@@ -88,7 +88,7 @@ def order_api(target: str, price: str, num: int, strategy: str, source: str):
         Param['OrderQty'] = str(n)
         g_TradeZMQ.new_order(g_TradeSession,Param)
         total_num -= n
-        time.sleep(0.2) # 每秒5笔下单限制
+        time.sleep(0.25) # 每秒5笔下单限制
 
     lock.release()
 
