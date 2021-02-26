@@ -184,7 +184,6 @@ class build:
             if self.build_strategy in list(order.keys()):
                 order.pop(self.build_strategy)
         root.protocol("WM_DELETE_WINDOW", callback)
-        root.mainloop()
 
 
     def build_thread(self):
@@ -249,7 +248,7 @@ class build:
 
         trade_period = gl.get_value('trade_period')
         localtime = gl.get_value('localtime')
-        if not trade_period or (localtime.tm_hour == 9 and localtime.tm_min < 35) or (localtime.tm_hour == 11 and localtime.tm_min > 24) or (localtime.tm_hour == 13 and localtime.tm_min < 5):
+        if not trade_period or (localtime.tm_hour == 9 and localtime.tm_min < 35) or (localtime.tm_hour == 11 and localtime.tm_min > 24) or (localtime.tm_hour == 13 and localtime.tm_min < 5) or (localtime.tm_hour == 14 and localtime.tm_min == 56):
             return
 
         order = gl.get_value('bd_order')['order']
@@ -502,10 +501,10 @@ class build:
 
             else:
 
-                # 每组3000vega进行平仓
+                # 每组5000vega进行平仓
                 close_vega = max(abs(v) - close_to_vega, 0)
                 for key in list(self.position_built.keys()):
-                    order[build_strategy][key] = {'originalqty': -1 * round(self.position_built[key] * min(3000, close_vega) / abs(v), 0)}
+                    order[build_strategy][key] = {'originalqty': -1 * round(self.position_built[key] * min(5000, close_vega) / abs(v), 0)}
 
             self.data_txt.write(time.strftime('%H:%M:%S', localtime) + ' | ' + '平仓判断后......' + '\n' + 'order for build：' + build_strategy + str(order[build_strategy]) + '\n')
             self.data_txt.flush()

@@ -210,7 +210,6 @@ class hedge:
             gl.global_var['hg_index'].pop(self.index)
             self.data_txt.close()
         root.protocol("WM_DELETE_WINDOW", callback)
-        root.mainloop()
 
 
     def hedge_thread(self):
@@ -252,7 +251,7 @@ class hedge:
 
         trade_period = gl.get_value('trade_period')
         localtime = gl.get_value('localtime')
-        if not trade_period or (localtime.tm_hour == 9 and localtime.tm_min < 33) or (localtime.tm_hour == 11 and localtime.tm_min > 26) or (localtime.tm_hour == 13 and localtime.tm_min < 3):
+        if not trade_period or (localtime.tm_hour == 9 and localtime.tm_min < 33) or (localtime.tm_hour == 11 and localtime.tm_min > 26) or (localtime.tm_hour == 13 and localtime.tm_min < 3) or (localtime.tm_hour == 14 and localtime.tm_min == 56):
             return
 
         if not self.p_update_flag:
@@ -465,9 +464,17 @@ class hedge:
         self.p_update_list = list(order[hedge_strategy].keys())
 
         def _order():
-            for target in list(order[hedge_strategy].keys()):
-                num = order[hedge_strategy][target]
-                od.order_api(target, 'HIT', num, hedge_strategy, 'hedge')
+            num_round = 0
+            num_max = max(abs(np.array(list(order[hedge_strategy].values()))))
+            num_per = 20
+            order_copy = copy.deepcopy(order[hedge_strategy])
+            while not num_per * num_round >= num_max:
+                for target in list(order[hedge_strategy].keys()):
+                    _sign = np.sign(order_copy[target])
+                    num = _sign * min(abs(order_copy[target]), num_per)
+                    od.order_api(target, 'HIT', num, hedge_strategy, 'hedge')
+                    order_copy[target] -= num
+                num_round += 1
 
         _t = threading.Thread(target=_order)
         _t.setDaemon(True)
